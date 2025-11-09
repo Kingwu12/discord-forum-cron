@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "missions:daily": "node scripts/post_daily_mission.js",
+    "forums:weekly": "node scripts/spawn_forum_threads.js weekly",
+    "forums:monthly": "node scripts/spawn_forum_threads.js monthly",
+    "forums:all": "node scripts/spawn_forum_threads.js all"
+  }
+}

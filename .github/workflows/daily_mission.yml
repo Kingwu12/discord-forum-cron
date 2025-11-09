@@ -1,7 +1,7 @@
 name: Daily Mission
 on:
   schedule:
-    - cron: '0 22 * * *' # 08:00 AEST (adjust for DST)
+    - cron: '0 22 * * *' # runs 08:00 AEST (cron is UTC)
   workflow_dispatch:
     inputs:
       force:
@@ -19,12 +19,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: 20
+        with: { node-version: 20 }
 
-      - run: npm ci --omit=dev
+      # Uncomment this block only if you add deps later
+      # - name: Install (if needed)
+      #   run: |
+      #     if [ -f package-lock.json ]; then
+      #       npm ci --omit=dev
+      #     elif [ -f package.json ]; then
+      #       npm i --omit=dev
+      #     else
+      #       echo "No package.json - skipping install"
+      #     fi
 
       - name: Post Daily Mission
         env:
@@ -32,7 +39,6 @@ jobs:
           MISSIONS_CHANNEL_ID: ${{ secrets.MISSIONS_CHANNEL_ID }}
         run: |
           FORCE_ARG=""
-          # Only pass --force when manually triggered with force=true
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
             FORCE_ARG="--force"
           fi

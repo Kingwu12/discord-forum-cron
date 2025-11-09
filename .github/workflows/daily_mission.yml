@@ -1,7 +1,7 @@
 name: Daily Mission
 on:
   schedule:
-    - cron: '0 22 * * *' # runs 08:00 AEST (cron is UTC)
+    - cron: '0 22 * * *' # 08:00 AEST (UTC cron)
   workflow_dispatch:
     inputs:
       force:
@@ -20,18 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-
-      # Uncomment this block only if you add deps later
-      # - name: Install (if needed)
-      #   run: |
-      #     if [ -f package-lock.json ]; then
-      #       npm ci --omit=dev
-      #     elif [ -f package.json ]; then
-      #       npm i --omit=dev
-      #     else
-      #       echo "No package.json - skipping install"
-      #     fi
+        with:
+          node-version: 20
 
       - name: Post Daily Mission
         env:
@@ -42,4 +32,4 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
             FORCE_ARG="--force"
           fi
-          node scripts/post_daily_mission.js $FORCE_ARG
+          node scripts/post_daily_mission.mjs $FORCE_ARG

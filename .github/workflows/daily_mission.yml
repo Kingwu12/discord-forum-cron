@@ -3,13 +3,7 @@ name: Daily Mission
 on:
   schedule:
     - cron: '0 22 * * *' # 08:00 AEST (UTC cron)
-  workflow_dispatch:
-    inputs:
-      force:
-        description: 'Force post even if today already exists'
-        type: boolean
-        required: false
-        default: false
+  workflow_dispatch: {} # manual Run workflow button
 
 concurrency:
   group: daily-mission
@@ -30,9 +24,4 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           MISSIONS_CHANNEL_ID: ${{ secrets.MISSIONS_CHANNEL_ID }}
-        run: |
-          FORCE_ARG=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
-            FORCE_ARG="--force"
-          fi
-          node ./scripts/post_daily_mission.js $FORCE_ARG
+        run: node ./scripts/post_daily_mission.js

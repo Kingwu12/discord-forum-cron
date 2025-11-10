@@ -1,9 +1,11 @@
 name: Daily Mission
 
 on:
-  schedule:
-    - cron: '0 22 * * *' # 08:00 AEST (UTC cron)
   workflow_dispatch: {} # manual Run workflow button
+  repository_dispatch: # external trigger (API)
+    types: [daily_mission]
+  schedule:
+    - cron: '0 22 * * *' # optional backup (22:00 UTC = 8/9am AU)
 
 concurrency:
   group: daily-mission

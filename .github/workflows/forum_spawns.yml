@@ -40,4 +40,4 @@ jobs:
           FORUM_DAILY_ID: ${{ secrets.FORUM_DAILY_ID }}
           FORUM_REFLECT_ID: ${{ secrets.FORUM_REFLECT_ID }}
         run: |
-          node scripts/spawn.js "${{ steps.kind.outputs.value }}"
+          node scripts/spawn_forum_threads.js "${{ steps.kind.outputs.value }}"

@@ -21,6 +21,11 @@ if (
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Deps
+// ─────────────────────────────────────────────────────────────────────────────
+const fs = require('fs').promises;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CLI args
 // ─────────────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -89,6 +94,28 @@ function formatMonthMelbourne(date) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Mission bank (daily)
+// ─────────────────────────────────────────────────────────────────────────────
+async function getRandomDailyMission() {
+  let bank;
+  try {
+    const raw = await fs.readFile('./missions/bank.json', 'utf8');
+    bank = JSON.parse(raw).daily || [];
+  } catch {
+    // Fallbacks if bank.json missing / invalid
+    bank = [
+      'What’s your ONE focus today? React ✅ when done.',
+      'Do a 5-minute task you’ve been avoiding. React ✅ when complete.',
+      'List your top 3 priorities for today. Mark ✅ after finishing #1.',
+      'Eliminate ONE distraction for the next hour. React ✅ to commit.',
+      'Do a 2-minute workspace reset right now. React ✅ when done.',
+    ];
+  }
+  if (!bank.length) throw new Error('No daily missions available.');
+  return bank[Math.floor(Math.random() * bank.length)];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Naming + embed content
 // ─────────────────────────────────────────────────────────────────────────────
 const melDate = getMelbourneDate();
@@ -97,29 +124,45 @@ const fmtMonth = formatMonthMelbourne(melDate);
 const week = isoWeekLocal(melDate);
 
 const nameByKind = {
-  daily: `Daily — ${fmtDay}`,
+  // Daily threads are now missions
+  daily: `Mission — ${fmtDay}`,
   weekly: `Week ${week} — ${melDate.getFullYear()}`,
   monthly: `Monthly — ${fmtMonth}`,
 };
 
 const titleByKind = {
-  daily: '🎯 Daily Check-In',
+  // Include date in daily title for clarity
+  daily: `🎯 Daily Mission — ${fmtDay}`,
   weekly: '🧭 Weekly Reflection',
   monthly: '🗓️ Monthly Review',
 };
 
-// Content strings (no markdown duplication in embed)
+// Only weekly/monthly use static prompts now.
+// Daily description is composed from mission + check-in instructions.
 const promptByKind = {
-  daily: 'What’s your **ONE focus** today?\nReply with ✅ when done.',
   weekly: '**Weekly reflection**\n1) What went well?\n2) What didn’t?\n3) Plan for next week?',
   monthly: '**Monthly review**\n• Top 3 wins\n• 1 bottleneck to fix\n• Theme for next month',
 };
 
-function buildEmbed(kind) {
+function buildEmbed(kind, { missionText } = {}) {
+  let description;
+
+  if (kind === 'daily') {
+    // Blend random mission from bank + general check-in ritual (no extra ✅ line)
+    description =
+      `**Today’s Mission**\n` +
+      `${missionText}\n\n` +
+      `**How to check in:**\n` +
+      `🌅 Morning — Comment your **one focus** or how you’ll approach this mission.\n` +
+      `🌙 Night — Reply with your progress or proof (photo, numbers, or reflection).`;
+  } else {
+    description = promptByKind[kind];
+  }
+
   return [
     {
       title: titleByKind[kind],
-      description: promptByKind[kind],
+      description,
       color: BRAND_ORANGE,
       footer: { text: 'Richard • Kingdom HQ' },
       timestamp: new Date().toISOString(), // keeps ISO timestamp for Discord
@@ -196,18 +239,38 @@ function buildEmbed(kind) {
         continue;
       }
 
+      // For daily, pick a random mission from bank
+      let missionText = null;
+      if (k === 'daily') {
+        try {
+          missionText = await getRandomDailyMission();
+          console.log(`[daily] selected mission: ${missionText}`);
+        } catch (err) {
+          console.error('Failed to load daily mission bank, using fallback.', err);
+          missionText = 'What’s your ONE focus today?';
+        }
+      }
+
       // ---- create thread ----
       const body = {
         name,
         applied_tags: [],
         message: {
-          embeds: buildEmbed(k),
+          embeds: buildEmbed(k, { missionText }),
           allowed_mentions: { parse: [] }, // prevent accidental pings
         },
       };
 
       if (!EMBED_ONLY) {
-        body.message.content = promptByKind[k];
+        if (k === 'daily') {
+          // Plain content mirrors the core idea but shorter, no extra ✅ line
+          body.message.content =
+            `Today’s Mission:\n${missionText}\n\n` +
+            `Morning: share your focus.\n` +
+            `Night: share your proof / reflection.`;
+        } else {
+          body.message.content = promptByKind[k];
+        }
       }
 
       const createRes = await fetch(`https://discord.com/api/v10/channels/${channel_id}/threads`, {

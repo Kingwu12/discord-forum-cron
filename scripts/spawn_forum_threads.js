@@ -93,26 +93,70 @@ function formatMonthMelbourne(date) {
   });
 }
 
+function dayOfYear(date) {
+  const start = new Date(date.getFullYear(), 0, 0);
+  const diff = date - start;
+  return Math.floor(diff / 86400000);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Mission bank (daily)
+// Mission bank (daily, grouped)
 // ─────────────────────────────────────────────────────────────────────────────
-async function getRandomDailyMission() {
-  let bank;
+
+const GROUP_LABELS = {
+  alignment: 'Alignment',
+  systems: 'Systems',
+  momentum: 'Momentum',
+  learning: 'Learning & Skill',
+  community: 'Community',
+  future: 'Future Builder',
+  reflection: 'Reflection',
+  energy_env: 'Energy & Environment',
+};
+
+async function getRandomDailyMission(melbourneDate) {
+  let data;
   try {
     const raw = await fs.readFile('./missions/bank.json', 'utf8');
-    bank = JSON.parse(raw).daily || [];
-  } catch {
-    // Fallbacks if bank.json missing / invalid
-    bank = [
-      'What’s your ONE focus today? React ✅ when done.',
-      'Do a 5-minute task you’ve been avoiding. React ✅ when complete.',
+    data = JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to read missions/bank.json, using fallback daily missions.', err);
+    const fallback = [
+      'What’s your ONE focus today? React with ✅ when done.',
+      'Do a 5-minute task you’ve been avoiding. React with ✅ when complete.',
       'List your top 3 priorities for today. Mark ✅ after finishing #1.',
-      'Eliminate ONE distraction for the next hour. React ✅ to commit.',
-      'Do a 2-minute workspace reset right now. React ✅ when done.',
+      'Eliminate ONE distraction for the next hour. React with ✅ to commit.',
+      'Do a 2-minute workspace reset right now. React with ✅ when done.',
     ];
+    const missionText = fallback[Math.floor(Math.random() * fallback.length)];
+    return { missionText, groupKey: null, groupLabel: null };
   }
-  if (!bank.length) throw new Error('No daily missions available.');
-  return bank[Math.floor(Math.random() * bank.length)];
+
+  // New grouped format: { groups: { alignment: [...], systems: [...], ... } }
+  if (data.groups && typeof data.groups === 'object') {
+    const groupKeys = Object.keys(data.groups).filter((k) => Array.isArray(data.groups[k]) && data.groups[k].length);
+    if (!groupKeys.length) {
+      throw new Error('No mission groups with content found in bank.json');
+    }
+
+    const d = melbourneDate || getMelbourneDate();
+    const doy = dayOfYear(d);
+    const groupKey = groupKeys[doy % groupKeys.length]; // rotate groups by day-of-year
+    const missions = data.groups[groupKey] || [];
+    if (!missions.length) {
+      throw new Error(`Group "${groupKey}" has no missions`);
+    }
+
+    const missionText = missions[Math.floor(Math.random() * missions.length)];
+    const groupLabel = GROUP_LABELS[groupKey] || groupKey;
+    return { missionText, groupKey, groupLabel };
+  }
+
+  // Legacy format: { daily: [...] }
+  const bank = data.daily || [];
+  if (!bank.length) throw new Error('No daily missions available in bank.json');
+  const missionText = bank[Math.floor(Math.random() * bank.length)];
+  return { missionText, groupKey: null, groupLabel: null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,17 +188,22 @@ const promptByKind = {
   monthly: '**Monthly review**\n• Top 3 wins\n• 1 bottleneck to fix\n• Theme for next month',
 };
 
-function buildEmbed(kind, { missionText } = {}) {
+function buildEmbed(kind, { missionText, groupLabel } = {}) {
   let description;
+  let footerText = 'Richard • Kingdom HQ';
 
   if (kind === 'daily') {
-    // Blend random mission from bank + general check-in ritual (no extra ✅ line)
     description =
       `**Today’s Mission**\n` +
       `${missionText}\n\n` +
       `**How to check in:**\n` +
       `🌅 Morning — Comment your **one focus** or how you’ll approach this mission.\n` +
       `🌙 Night — Reply with your progress or proof (photo, numbers, or reflection).`;
+
+    if (groupLabel) {
+      description += `\n\n*Theme: \`${groupLabel}\`*`;
+      footerText = `Richard • Kingdom HQ • ${groupLabel}`;
+    }
   } else {
     description = promptByKind[kind];
   }
@@ -164,7 +213,7 @@ function buildEmbed(kind, { missionText } = {}) {
       title: titleByKind[kind],
       description,
       color: BRAND_ORANGE,
-      footer: { text: 'Richard • Kingdom HQ' },
+      footer: { text: footerText },
       timestamp: new Date().toISOString(), // keeps ISO timestamp for Discord
     },
   ];
@@ -239,15 +288,19 @@ function buildEmbed(kind, { missionText } = {}) {
         continue;
       }
 
-      // For daily, pick a random mission from bank
+      // For daily, pick a random mission from grouped bank
       let missionText = null;
+      let groupLabel = null;
+
       if (k === 'daily') {
         try {
-          missionText = await getRandomDailyMission();
-          console.log(`[daily] selected mission: ${missionText}`);
+          const mission = await getRandomDailyMission(melDate);
+          missionText = mission.missionText;
+          groupLabel = mission.groupLabel;
+          console.log(`[daily] selected mission (group=${mission.groupKey || 'none'}): ${missionText}`);
         } catch (err) {
           console.error('Failed to load daily mission bank, using fallback.', err);
-          missionText = 'What’s your ONE focus today?';
+          missionText = 'What’s your ONE focus today? React with ✅ when done.';
         }
       }
 
@@ -256,14 +309,13 @@ function buildEmbed(kind, { missionText } = {}) {
         name,
         applied_tags: [],
         message: {
-          embeds: buildEmbed(k, { missionText }),
+          embeds: buildEmbed(k, { missionText, groupLabel }),
           allowed_mentions: { parse: [] }, // prevent accidental pings
         },
       };
 
       if (!EMBED_ONLY) {
         if (k === 'daily') {
-          // Plain content mirrors the core idea but shorter, no extra ✅ line
           body.message.content =
             `Today’s Mission:\n${missionText}\n\n` +
             `Morning: share your focus.\n` +

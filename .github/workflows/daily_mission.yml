@@ -26,4 +26,5 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           MISSIONS_CHANNEL_ID: ${{ secrets.MISSIONS_CHANNEL_ID }}
+        # Runs from repo root so scripts resolve missions/bank.json and scripts/lib/*
         run: node ./scripts/post_daily_mission.js

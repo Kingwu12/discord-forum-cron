@@ -1,5 +1,7 @@
+/* Load env before any other project imports that may touch Firebase. */
 import 'dotenv/config';
-import { Client, Events, GatewayIntentBits } from 'discord.js';
+
+import { Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
 
 import { routeChatInputCommand } from './command-router';
 
@@ -28,12 +30,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.deferred || interaction.replied) {
         await interaction.followUp({
           content: 'Something went wrong.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       } else {
         await interaction.reply({
           content: 'Something went wrong.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
     } catch {

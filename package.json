@@ -1,8 +1,8 @@
 {
-  "name": "discord-forum-cron",
+  "name": "citadel",
   "private": true,
   "scripts": {
-    "dev": "tsx src/bot/main.ts",
+    "dev": "nodemon --watch src --watch .env --ext ts,env --exec tsx src/bot/main.ts",
     "bot": "tsx src/bot/main.ts",
     "bot:register-commands": "tsx src/bot/register-commands.ts",
     "missions:daily": "node scripts/post_daily_mission.js",
@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
+    "nodemon": "^3.1.14",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }

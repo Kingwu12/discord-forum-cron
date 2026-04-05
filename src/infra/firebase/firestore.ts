@@ -1,4 +1,7 @@
+import 'dotenv/config';
+
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+
 import { getFirebaseAdminApp } from './admin';
 
 let cachedDb: Firestore | null = null;

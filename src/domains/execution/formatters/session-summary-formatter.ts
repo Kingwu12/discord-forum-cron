@@ -24,6 +24,29 @@ export function formatExecutionDurationMs(durationMs: number): string {
   return '< 1m';
 }
 
+/**
+ * Duration for public session-complete lines (includes seconds when relevant), e.g. `6m 32s`, `2h 14m 5s`.
+ */
+export function formatExecutionDurationForPublicComplete(durationMs: number): string {
+  const ms = clampNonNegativeMs(durationMs);
+  const totalSec = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+
+  if (hours > 0) {
+    if (minutes > 0 && seconds > 0) return `${hours}h ${minutes}m ${seconds}s`;
+    if (minutes > 0) return `${hours}h ${minutes}m`;
+    if (seconds > 0) return `${hours}h ${seconds}s`;
+    return `${hours}h`;
+  }
+  if (minutes > 0) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  if (seconds > 0) return `${seconds}s`;
+  return '< 1m';
+}
+
 /** Ephemeral / DM line when `/today` has nothing to show for the calendar day. */
 export const TODAY_SUMMARY_EMPTY = 'No completed sessions today.';
 
@@ -49,7 +72,7 @@ export type PublicSessionCompleteInput = {
  * Line posted to a channel when a session completes (mention + duration).
  */
 export function formatPublicSessionCompleteMessage(input: PublicSessionCompleteInput): string {
-  const duration = formatExecutionDurationMs(input.durationMs);
+  const duration = formatExecutionDurationForPublicComplete(input.durationMs);
   return `<@${input.discordUserId}> completed a ${duration} execution session.`;
 }
 

@@ -1,5 +1,6 @@
 import {
   type ChatInputCommandInteraction,
+  MessageFlags,
   SlashCommandBuilder,
 } from 'discord.js';
 
@@ -9,12 +10,8 @@ import { executionAccessService, toExecutionAccessContext } from '../services/ex
 import { ExecutionSessionService } from '../services/execution-session-service';
 import { START_REPLY_DENIED, START_REPLY_ERROR } from './start';
 
-/** Ephemeral when there is nothing to end. */
-export const END_REPLY_NO_ACTIVE_SESSION =
-  'No active session. Use `/start` to begin.';
-
-/** Ephemeral after a successful end (always sent once). */
-export const END_REPLY_SUCCESS = 'Session ended.';
+/** Ephemeral when the user has no active session to end. */
+export const END_REPLY_NO_ACTIVE_SESSION = 'You do not have an active session.';
 
 const executionSessionService = new ExecutionSessionService();
 
@@ -36,7 +33,7 @@ export async function handleEndCommand(
     });
     await interaction.reply({
       content: START_REPLY_DENIED,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -51,7 +48,7 @@ export async function handleEndCommand(
     });
     await interaction.reply({
       content: START_REPLY_DENIED,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -63,7 +60,24 @@ export async function handleEndCommand(
   });
 
   try {
-    // Persistence (completed session write + active delete) happens inside endSession, before any public post.
+    const active = await executionSessionService.getActiveSessionForUser(interaction.user.id);
+    if (!active) {
+      executionLog.info('end_blocked', {
+        reason: 'no_active_session',
+        userId: interaction.user.id,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+      });
+      await interaction.reply({
+        content: END_REPLY_NO_ACTIVE_SESSION,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Public defer — success path must not use ephemeral (no "Only you can see this").
+    await interaction.deferReply();
+
     const result = await executionSessionService.endSession({
       discordUserId: interaction.user.id,
     });
@@ -75,9 +89,10 @@ export async function handleEndCommand(
         guildId: interaction.guildId,
         channelId: interaction.channelId,
       });
-      await interaction.reply({
+      await interaction.deleteReply().catch(() => {});
+      await interaction.followUp({
         content: END_REPLY_NO_ACTIVE_SESSION,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -89,36 +104,12 @@ export async function handleEndCommand(
       completedSessionId: result.completedSessionId,
     });
 
-    await interaction.reply({
-      content: END_REPLY_SUCCESS,
-      ephemeral: true,
-    });
-
-    const allowPublic = executionAccessService.canPostPublicExecutionMessage(ctx);
-    if (!allowPublic) return;
-
-    const channel = interaction.channel;
-    if (channel === null || !channel.isTextBased()) return;
-
     const publicContent = formatPublicSessionCompleteMessage({
       discordUserId: interaction.user.id,
       durationMs: result.completedSession.durationMs,
     });
 
-    try {
-      await channel.send({ content: publicContent });
-    } catch (sendErr) {
-      executionLog.error(
-        'end_public_post_failed',
-        {
-          userId: interaction.user.id,
-          guildId: interaction.guildId,
-          channelId: interaction.channelId,
-          completedSessionId: result.completedSessionId,
-        },
-        sendErr,
-      );
-    }
+    await interaction.editReply({ content: publicContent });
   } catch (err) {
     executionLog.error(
       'end_error',
@@ -129,16 +120,26 @@ export async function handleEndCommand(
       },
       err,
     );
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({
-        content: START_REPLY_ERROR,
-        ephemeral: true,
-      });
-    } else {
-      await interaction.reply({
-        content: START_REPLY_ERROR,
-        ephemeral: true,
-      });
+    try {
+      if (interaction.deferred) {
+        await interaction.deleteReply().catch(() => {});
+        await interaction.followUp({
+          content: START_REPLY_ERROR,
+          flags: MessageFlags.Ephemeral,
+        });
+      } else if (interaction.replied) {
+        await interaction.followUp({
+          content: START_REPLY_ERROR,
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.reply({
+          content: START_REPLY_ERROR,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+    } catch {
+      /* ignore */
     }
   }
 }

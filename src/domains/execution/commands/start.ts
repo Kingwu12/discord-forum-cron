@@ -1,5 +1,6 @@
 import {
   type ChatInputCommandInteraction,
+  MessageFlags,
   SlashCommandBuilder,
 } from 'discord.js';
 
@@ -36,7 +37,7 @@ export async function handleStartCommand(
     });
     await interaction.reply({
       content: START_REPLY_DENIED,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -51,7 +52,7 @@ export async function handleStartCommand(
     });
     await interaction.reply({
       content: START_REPLY_DENIED,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -61,6 +62,8 @@ export async function handleStartCommand(
     guildId: interaction.guildId,
     channelId: interaction.channelId,
   });
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     const result = await executionSessionService.startSession({
@@ -76,10 +79,7 @@ export async function handleStartCommand(
         guildId: interaction.guildId,
         channelId: interaction.channelId,
       });
-      await interaction.reply({
-        content: START_REPLY_ALREADY_ACTIVE,
-        ephemeral: true,
-      });
+      await interaction.editReply({ content: START_REPLY_ALREADY_ACTIVE });
       return;
     }
 
@@ -88,10 +88,7 @@ export async function handleStartCommand(
       guildId: interaction.guildId,
       channelId: interaction.channelId,
     });
-    await interaction.reply({
-      content: START_REPLY_SUCCESS,
-      ephemeral: true,
-    });
+    await interaction.editReply({ content: START_REPLY_SUCCESS });
   } catch (err) {
     executionLog.error(
       'start_error',
@@ -102,9 +99,6 @@ export async function handleStartCommand(
       },
       err,
     );
-    await interaction.reply({
-      content: START_REPLY_ERROR,
-      ephemeral: true,
-    });
+    await interaction.editReply({ content: START_REPLY_ERROR });
   }
 }

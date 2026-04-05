@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+dist/
+build/
+coverage/
+logs
+*.log
+.DS_Store
+.vscode/
+.idea/
+*serviceAccount*.json

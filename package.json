@@ -2,9 +2,22 @@
   "name": "discord-forum-cron",
   "private": true,
   "scripts": {
+    "dev": "tsx src/index.ts",
+    "bot": "tsx src/bot/main.ts",
+    "bot:register-commands": "tsx src/bot/register-commands.ts",
     "missions:daily": "node scripts/post_daily_mission.js",
     "forums:weekly": "node scripts/spawn_forum_threads.js weekly",
     "forums:monthly": "node scripts/spawn_forum_threads.js monthly",
     "forums:all": "node scripts/spawn_forum_threads.js all"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.2",
+    "dotenv": "^17.4.0",
+    "firebase-admin": "^13.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
   }
 }

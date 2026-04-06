@@ -5,6 +5,7 @@
 
 export const DEFAULT_EXECUTION_PANEL_GUILD_ID = '1485139623360598150';
 export const DEFAULT_EXECUTION_PANEL_CHANNEL_ID = '1490324763997110374';
+export const DEFAULT_ACTIVE_LOOPS_CHANNEL_ID = '1490651286251638865';
 /** Public execution output / social proof (not the control panel). */
 export const DEFAULT_EXECUTION_FEED_CHANNEL_ID = '1490338160012693605';
 
@@ -20,6 +21,11 @@ export function getExecutionPanelChannelId(): string {
 
 export function getExecutionFeedChannelId(): string {
   return DEFAULT_EXECUTION_FEED_CHANNEL_ID;
+}
+
+export function getActiveLoopsChannelId(): string {
+  const v = process.env.ACTIVE_LOOPS_CHANNEL_ID?.trim();
+  return v && v.length > 0 ? v : DEFAULT_ACTIVE_LOOPS_CHANNEL_ID;
 }
 
 /** Always on: guild/channel resolve to defaults or env. */

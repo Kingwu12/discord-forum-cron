@@ -1,10 +1,6 @@
-import {
-  type ChatInputCommandInteraction,
-  MessageFlags,
-  SlashCommandBuilder,
-} from 'discord.js';
+import { type ChatInputCommandInteraction, MessageFlags, SlashCommandBuilder } from 'discord.js';
 
-import { ensureExecutionPanel } from '../../../bot/execution-panel';
+import { deleteActiveLoopPanelMessage, ensureExecutionPanel } from '../../../bot/execution-panel';
 import { sendExecutionCompleteToFeed } from '../../../bot/execution-feed-channel';
 import { executionLog } from '../../../shared/logging';
 import { executionAccessService, toExecutionAccessContext } from '../services/execution-access-service';
@@ -40,21 +36,10 @@ export const endSlashCommand = new SlashCommandBuilder()
       .setRequired(false)
       .setMaxLength(2000),
   )
-  .addAttachmentOption((option) =>
-    option
-      .setName('proof_file')
-      .setDescription('Proof attachment')
-      .setRequired(false),
-  );
+  .addAttachmentOption((option) => option.setName('proof_file').setDescription('Proof attachment').setRequired(false));
 
-export async function handleEndCommand(
-  interaction: ChatInputCommandInteraction,
-): Promise<void> {
-  if (
-    !interaction.inGuild() ||
-    interaction.guildId === null ||
-    interaction.channelId === null
-  ) {
+export async function handleEndCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!interaction.inGuild() || interaction.guildId === null || interaction.channelId === null) {
     executionLog.info('loop_close_blocked', {
       reason: 'invalid_context',
       userId: interaction.user.id,
@@ -161,6 +146,7 @@ export async function handleEndCommand(
       closedLoopFirestoreId: result.closedLoopFirestoreId,
     });
 
+    await deleteActiveLoopPanelMessage(interaction.client, open);
     await ensureExecutionPanel(interaction.client, { source: 'slash_close', userId: interaction.user.id });
     await sendExecutionCompleteToFeed(interaction.client, {
       userId: interaction.user.id,

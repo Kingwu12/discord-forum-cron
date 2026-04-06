@@ -16,6 +16,8 @@ export interface OpenLoop {
   guildId: DiscordSnowflake;
   channelId: DiscordSnowflake;
   commitmentText: string;
+  loopPanelMessageId?: string;
+  loopPanelChannelId?: string;
   status: 'open';
   openedAt: number;
   createdAt: number;

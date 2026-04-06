@@ -15,6 +15,7 @@ import {
 } from 'discord.js';
 
 import {
+  getActiveLoopsChannelId,
   getExecutionPanelChannelId,
   getExecutionPanelGuildId,
   isExecutionPanelConfigured,
@@ -36,8 +37,8 @@ const openLoopRepo = new OpenLoopRepo();
 const closedLoopRepo = new ClosedLoopRepo();
 
 export const PANEL_BUTTON_OPEN = 'citadel:exec:open';
-export const PANEL_BUTTON_CLOSE = 'citadel:exec:close';
 export const PANEL_BUTTON_TODAY = 'citadel:exec:today';
+export const LOOP_PANEL_BUTTON_CLOSE_PREFIX = 'citadel:exec:loop:close:';
 const MODAL_START = 'citadel:modal:start';
 const MODAL_END = 'citadel:modal:end';
 const INPUT_COMMITMENT = 'commitment';
@@ -79,6 +80,10 @@ function modalPanelContextOrNull(interaction: ModalSubmitInteraction): {
 
 function isConfiguredPanelChannel(guildId: string, channelId: string): boolean {
   return guildId === getExecutionPanelGuildId() && channelId === getExecutionPanelChannelId();
+}
+
+function isConfiguredActiveLoopsChannel(guildId: string, channelId: string): boolean {
+  return guildId === getExecutionPanelGuildId() && channelId === getActiveLoopsChannelId();
 }
 
 function messageIsOurPanel(message: Message, clientId: string | undefined): boolean {
@@ -192,10 +197,6 @@ function buildPanelComponents(): ActionRowBuilder<ButtonBuilder>[] {
       .setLabel('Open Loop')
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
-      .setCustomId(PANEL_BUTTON_CLOSE)
-      .setLabel('Close Loop')
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
       .setCustomId(PANEL_BUTTON_TODAY)
       .setLabel('Today')
       .setStyle(ButtonStyle.Secondary),
@@ -206,12 +207,12 @@ function buildPanelComponents(): ActionRowBuilder<ButtonBuilder>[] {
 function buildStartModal(): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(MODAL_START)
-    .setTitle('CITADEL · OPEN LOOP')
+    .setTitle('INITIATE LOOP')
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId(INPUT_COMMITMENT)
-          .setLabel('What will be executed?')
+          .setLabel('DEFINE EXECUTION')
           .setStyle(TextInputStyle.Short)
           .setMaxLength(400)
           .setRequired(true),
@@ -222,12 +223,12 @@ function buildStartModal(): ModalBuilder {
 function buildEndModal(): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(MODAL_END)
-    .setTitle('CITADEL · CLOSE LOOP')
+    .setTitle('CLOSE LOOP')
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId(INPUT_PROOF)
-          .setLabel('What was executed?')
+          .setLabel('WHAT WAS EXECUTED')
           .setStyle(TextInputStyle.Paragraph)
           .setMaxLength(2000)
           .setRequired(true),
@@ -235,12 +236,80 @@ function buildEndModal(): ModalBuilder {
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId(INPUT_REFLECTION)
-          .setLabel('Proof (optional)')
+          .setLabel('PROOF')
           .setStyle(TextInputStyle.Paragraph)
           .setMaxLength(1000)
-          .setRequired(false),
+          .setRequired(true),
       ),
     );
+}
+
+function buildLoopPanelCloseCustomId(ownerUserId: string): string {
+  return `${LOOP_PANEL_BUTTON_CLOSE_PREFIX}${ownerUserId}`;
+}
+
+function ownerUserIdFromLoopPanelCloseCustomId(customId: string): string | null {
+  if (!customId.startsWith(LOOP_PANEL_BUTTON_CLOSE_PREFIX)) return null;
+  const ownerUserId = customId.slice(LOOP_PANEL_BUTTON_CLOSE_PREFIX.length).trim();
+  return ownerUserId.length > 0 ? ownerUserId : null;
+}
+
+function buildActiveLoopPanelEmbed(taskText: string, openedAt: number): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0xffd700)
+    .setDescription('● LOOP OPEN')
+    .addFields(
+      { name: '◈ EXECUTING', value: sanitizeCommitmentDisplay(taskText, 500) || '—', inline: false },
+      { name: '◈ TIME IN', value: formatElapsedCompact(openedAt), inline: false },
+      { name: '◈ STATUS', value: 'LIVE', inline: false },
+    );
+}
+
+function buildActiveLoopPanelComponents(ownerUserId: string): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(buildLoopPanelCloseCustomId(ownerUserId))
+        .setLabel('Close Loop')
+        .setStyle(ButtonStyle.Danger),
+    ),
+  ];
+}
+
+export async function createActiveLoopPanelMessage(
+  client: Client,
+  openLoop: {
+    discordUserId: string;
+    commitmentText: string;
+    openedAt: number;
+  },
+): Promise<void> {
+  const guild = await client.guilds.fetch(getExecutionPanelGuildId()).catch(() => null);
+  if (!guild) return;
+  const channel = await guild.channels.fetch(getActiveLoopsChannelId()).catch(() => null);
+  if (!channel || !channel.isTextBased() || !channel.isSendable()) return;
+  const msg = await channel.send({
+    embeds: [buildActiveLoopPanelEmbed(openLoop.commitmentText, openLoop.openedAt)],
+    components: buildActiveLoopPanelComponents(openLoop.discordUserId),
+  });
+  await openLoopRepo.setLoopPanelRef(openLoop.discordUserId, msg.id, channel.id);
+}
+
+export async function deleteActiveLoopPanelMessage(
+  client: Client,
+  openLoop: {
+    guildId: string;
+    loopPanelChannelId?: string;
+    loopPanelMessageId?: string;
+  },
+): Promise<void> {
+  if (!openLoop.loopPanelMessageId) return;
+  const guild = await client.guilds.fetch(openLoop.guildId).catch(() => null);
+  if (!guild) return;
+  const targetChannelId = openLoop.loopPanelChannelId || getActiveLoopsChannelId();
+  const channel = await guild.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) return;
+  await channel.messages.fetch(openLoop.loopPanelMessageId).then((m) => m.delete()).catch(() => {});
 }
 
 type PanelLogExtra = Record<string, string | undefined>;
@@ -431,8 +500,8 @@ export async function refreshExecutionPanelIfActive(client: Client): Promise<voi
 export function isExecutionPanelButtonCustomId(customId: string): boolean {
   return (
     customId === PANEL_BUTTON_OPEN ||
-    customId === PANEL_BUTTON_CLOSE ||
-    customId === PANEL_BUTTON_TODAY
+    customId === PANEL_BUTTON_TODAY ||
+    customId.startsWith(LOOP_PANEL_BUTTON_CLOSE_PREFIX)
   );
 }
 
@@ -451,13 +520,6 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
     return true;
   }
 
-  if (!isConfiguredPanelChannel(loc.guildId, loc.channelId)) {
-    await interaction
-      .reply({ content: 'Use the panel channel.', ephemeral: true })
-      .catch(() => {});
-    return true;
-  }
-
   const ctx = toExecutionAccessContext(interaction);
   if (!executionAccessService.canUseExecutionCommand(ctx)) {
     await interaction.reply({ content: 'Execution is not available here.', ephemeral: true }).catch(() => {});
@@ -469,6 +531,10 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
   const channelId = loc.channelId;
 
   if (customId === MODAL_START) {
+    if (!isConfiguredPanelChannel(guildId, channelId)) {
+      await interaction.reply({ content: 'Use the panel channel.', ephemeral: true }).catch(() => {});
+      return true;
+    }
     const commitmentRaw = interaction.fields.getTextInputValue(INPUT_COMMITMENT).trim();
     const commitment = commitmentRaw.replace(/\r?\n/g, ' ').trim();
     if (commitment.length < OPEN_INTENTION_MIN_LENGTH || isNonWorkIntention(commitment)) {
@@ -543,6 +609,7 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
         source: 'panel_modal',
       });
 
+      await createActiveLoopPanelMessage(interaction.client, result.openLoop);
       await ensureExecutionPanel(interaction.client, { source: 'panel_open', userId });
       await interaction.editReply({
         embeds: [
@@ -569,10 +636,26 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
   }
 
   if (customId === MODAL_END) {
+    if (!isConfiguredActiveLoopsChannel(guildId, channelId)) {
+      await interaction.reply({ content: 'Use the active-loops channel.', ephemeral: true }).catch(() => {});
+      return true;
+    }
     const proof = interaction.fields.getTextInputValue(INPUT_PROOF).trim();
     const reflectionNotesRaw = interaction.fields.getTextInputValue(INPUT_REFLECTION)?.trim() ?? '';
+    // Future enhancement: after modal submit, prompt user for attachment upload
+    // as a second-step proof flow (Discord modals do not support file uploads).
 
     if (!proof) {
+      executionLog.info('loop_close_blocked_no_proof', {
+        userId,
+        guildId,
+        channelId,
+        source: 'panel_modal',
+      });
+      await interaction.reply({ content: CLOSE_PROOF_REQUIRED_MESSAGE, ephemeral: true });
+      return true;
+    }
+    if (!reflectionNotesRaw) {
       executionLog.info('loop_close_blocked_no_proof', {
         userId,
         guildId,
@@ -655,6 +738,7 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
         source: 'panel_modal',
       });
 
+      await deleteActiveLoopPanelMessage(interaction.client, open);
       await ensureExecutionPanel(interaction.client, { source: 'panel_close', userId });
       await sendExecutionCompleteToFeed(interaction.client, {
         userId,
@@ -699,10 +783,15 @@ export async function handleExecutionPanelButton(interaction: ButtonInteraction)
     return true;
   }
 
-  if (!isConfiguredPanelChannel(loc.guildId, loc.channelId)) {
+  const isMainPanelButton = customId === PANEL_BUTTON_OPEN || customId === PANEL_BUTTON_TODAY;
+  if (isMainPanelButton && !isConfiguredPanelChannel(loc.guildId, loc.channelId)) {
     await interaction
       .reply({ content: 'Use the panel channel.', ephemeral: true })
       .catch(() => {});
+    return true;
+  }
+  if (customId.startsWith(LOOP_PANEL_BUTTON_CLOSE_PREFIX) && !isConfiguredActiveLoopsChannel(loc.guildId, loc.channelId)) {
+    await interaction.reply({ content: 'Use the active-loops channel.', ephemeral: true }).catch(() => {});
     return true;
   }
 
@@ -716,8 +805,8 @@ export async function handleExecutionPanelButton(interaction: ButtonInteraction)
     await handleOpenButton(interaction);
     return true;
   }
-  if (customId === PANEL_BUTTON_CLOSE) {
-    await handleCloseButton(interaction);
+  if (customId.startsWith(LOOP_PANEL_BUTTON_CLOSE_PREFIX)) {
+    await handleOwnedLoopCloseButton(interaction, customId);
     return true;
   }
   if (customId === PANEL_BUTTON_TODAY) {
@@ -752,23 +841,18 @@ async function handleOpenButton(interaction: ButtonInteraction): Promise<void> {
   await interaction.showModal(buildStartModal());
 }
 
-async function handleCloseButton(interaction: ButtonInteraction): Promise<void> {
-  const userId = interaction.user.id;
-  const guildId = interaction.guildId!;
-  const channelId = interaction.channelId!;
-
-  const open = await loopService.getOpenLoopForUser(userId);
+async function handleOwnedLoopCloseButton(
+  interaction: ButtonInteraction,
+  customId: string,
+): Promise<void> {
+  const ownerUserId = ownerUserIdFromLoopPanelCloseCustomId(customId);
+  if (!ownerUserId || interaction.user.id !== ownerUserId) {
+    await interaction.reply({ content: 'This loop is not yours.', ephemeral: true });
+    return;
+  }
+  const open = await loopService.getOpenLoopForUser(ownerUserId);
   if (!open) {
-    executionLog.info('loop_close_blocked_no_open', {
-      userId,
-      guildId,
-      channelId,
-      source: 'panel',
-    });
-    await interaction.reply({
-      content: 'No open loop found.',
-      ephemeral: true,
-    });
+    await interaction.reply({ content: 'No open loop found.', ephemeral: true });
     return;
   }
   await interaction.showModal(buildEndModal());

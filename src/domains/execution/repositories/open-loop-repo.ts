@@ -5,7 +5,7 @@ import type { OpenLoop } from '../types/execution.types';
 import { EXECUTION_OPEN_LOOPS } from './execution-collections';
 
 function toFirestorePayload(loop: OpenLoop): Record<string, unknown> {
-  return {
+  const payload: Record<string, unknown> = {
     loopId: loop.loopId,
     discordUserId: loop.discordUserId,
     guildId: loop.guildId,
@@ -17,6 +17,9 @@ function toFirestorePayload(loop: OpenLoop): Record<string, unknown> {
     updatedAt: loop.updatedAt,
     schemaVersion: 1,
   };
+  if (loop.loopPanelMessageId) payload.loopPanelMessageId = loop.loopPanelMessageId;
+  if (loop.loopPanelChannelId) payload.loopPanelChannelId = loop.loopPanelChannelId;
+  return payload;
 }
 
 function mapSnapshotToOpenLoop(snap: DocumentSnapshot): OpenLoop | null {
@@ -28,6 +31,8 @@ function mapSnapshotToOpenLoop(snap: DocumentSnapshot): OpenLoop | null {
   const guildId = data.guildId;
   const channelId = data.channelId;
   const commitmentText = data.commitmentText;
+  const loopPanelMessageId = data.loopPanelMessageId;
+  const loopPanelChannelId = data.loopPanelChannelId;
   const openedAt = data.openedAt;
   const createdAt = data.createdAt;
   const updatedAt = data.updatedAt;
@@ -52,6 +57,8 @@ function mapSnapshotToOpenLoop(snap: DocumentSnapshot): OpenLoop | null {
     guildId,
     channelId,
     commitmentText,
+    loopPanelMessageId: typeof loopPanelMessageId === 'string' ? loopPanelMessageId : undefined,
+    loopPanelChannelId: typeof loopPanelChannelId === 'string' ? loopPanelChannelId : undefined,
     status: 'open',
     openedAt,
     createdAt,
@@ -86,15 +93,16 @@ export class OpenLoopRepo {
     await this.docRef(discordUserId).delete();
   }
 
-  async listOpenLoopsInContext(
-    guildId: string,
-    channelId: string,
-    limitCount?: number,
-  ): Promise<OpenLoop[]> {
-    let query = this
-      .collection()
-      .where('guildId', '==', guildId)
-      .where('channelId', '==', channelId);
+  async setLoopPanelRef(discordUserId: string, loopPanelMessageId: string, loopPanelChannelId: string): Promise<void> {
+    if (!discordUserId || !loopPanelMessageId || !loopPanelChannelId) return;
+    await this.docRef(discordUserId).set(
+      { loopPanelMessageId, loopPanelChannelId, updatedAt: Date.now(), schemaVersion: 1 },
+      { merge: true },
+    );
+  }
+
+  async listOpenLoopsInContext(guildId: string, channelId: string, limitCount?: number): Promise<OpenLoop[]> {
+    let query = this.collection().where('guildId', '==', guildId).where('channelId', '==', channelId);
     if (typeof limitCount === 'number' && Number.isFinite(limitCount) && limitCount > 0) {
       query = query.limit(Math.floor(limitCount));
     }

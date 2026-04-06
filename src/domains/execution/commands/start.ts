@@ -1,23 +1,16 @@
-import {
-  type ChatInputCommandInteraction,
-  MessageFlags,
-  SlashCommandBuilder,
-} from 'discord.js';
+import { type ChatInputCommandInteraction, MessageFlags, SlashCommandBuilder } from 'discord.js';
 
-import { ensureExecutionPanel } from '../../../bot/execution-panel';
+import { createActiveLoopPanelMessage, ensureExecutionPanel } from '../../../bot/execution-panel';
 import { buildLoopOpenCockpitEmbed } from '../formatters/loop-cockpit-embed';
 import { executionLog } from '../../../shared/logging';
 import { executionAccessService, toExecutionAccessContext } from '../services/execution-access-service';
 import { LoopService } from '../services/loop-service';
 
 /** User-facing copy (ephemeral — blocks only). */
-export const START_REPLY_DENIED =
-  'Execution commands are not available here.';
-export const START_REPLY_ALREADY_OPEN =
-  'You already have an open loop. Close it before opening another.';
+export const START_REPLY_DENIED = 'Execution commands are not available here.';
+export const START_REPLY_ALREADY_OPEN = 'You already have an open loop. Close it before opening another.';
 export const START_REPLY_COMMITMENT_REQUIRED = 'Required.';
-export const START_REPLY_ERROR =
-  'Something went wrong. Try again in a moment.';
+export const START_REPLY_ERROR = 'Something went wrong. Try again in a moment.';
 
 const loopService = new LoopService();
 
@@ -25,21 +18,11 @@ export const startSlashCommand = new SlashCommandBuilder()
   .setName('start')
   .setDescription('Open a loop')
   .addStringOption((option) =>
-    option
-      .setName('commitment')
-      .setDescription('What will be executed (one line)')
-      .setRequired(true)
-      .setMaxLength(400),
+    option.setName('commitment').setDescription('What will be executed (one line)').setRequired(true).setMaxLength(400),
   );
 
-export async function handleStartCommand(
-  interaction: ChatInputCommandInteraction,
-): Promise<void> {
-  if (
-    !interaction.inGuild() ||
-    interaction.guildId === null ||
-    interaction.channelId === null
-  ) {
+export async function handleStartCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!interaction.inGuild() || interaction.guildId === null || interaction.channelId === null) {
     executionLog.info('loop_open_blocked', {
       reason: 'invalid_context',
       userId: interaction.user.id,
@@ -110,6 +93,7 @@ export async function handleStartCommand(
       loopId: result.openLoop.loopId,
     });
 
+    await createActiveLoopPanelMessage(interaction.client, result.openLoop);
     await ensureExecutionPanel(interaction.client, { source: 'slash_open', userId: interaction.user.id });
     await interaction.editReply({
       embeds: [

@@ -40,11 +40,13 @@ export function buildSuggestedClosePost(p: SuggestedClosePostParams): string {
 export function buildExecutionFeedEmbed(p: {
   durationMs: number;
   executedText?: string;
+  reflectionText?: string;
   proofImageRef?: string;
   proofFallbackText?: string;
 }): EmbedBuilder {
   const duration = formatExecutionDurationShort(p.durationMs);
   const executed = p.executedText ? sanitizeCommitmentDisplay(p.executedText, 500) : '';
+  const reflection = p.reflectionText ? sanitizeCommitmentDisplay(p.reflectionText, 700) : '';
   const proofFallbackText = p.proofFallbackText
     ? sanitizeCommitmentDisplay(p.proofFallbackText, 700)
     : undefined;
@@ -64,6 +66,9 @@ export function buildExecutionFeedEmbed(p: {
     embed.setImage(p.proofImageRef);
   } else if (proofFallbackText) {
     embed.setDescription([...(lines.length > 0 ? lines : []), `PROOF: ${proofFallbackText}`].join('\n'));
+  }
+  if (reflection.length > 0) {
+    embed.setFooter({ text: `"${reflection}"` });
   }
 
   return embed;

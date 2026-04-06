@@ -126,4 +126,18 @@ export class OpenLoopRepo {
     }
     return loops;
   }
+
+  async listAllOpenLoops(limitCount?: number): Promise<OpenLoop[]> {
+    let query = this.collection();
+    if (typeof limitCount === 'number' && Number.isFinite(limitCount) && limitCount > 0) {
+      query = query.limit(Math.floor(limitCount));
+    }
+    const snap = await query.get();
+    const loops: OpenLoop[] = [];
+    for (const doc of snap.docs) {
+      const mapped = mapSnapshotToOpenLoop(doc);
+      if (mapped) loops.push(mapped);
+    }
+    return loops;
+  }
 }

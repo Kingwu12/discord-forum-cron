@@ -64,10 +64,12 @@ export async function sendExecutionCompleteToFeed(
   const proofImageUrl = params.proofAttachmentUrls?.[0];
   const proofFilename = proofImageUrl ? inferProofFilenameFromUrl(proofImageUrl) : undefined;
   const proofImageRef = proofFilename ? `attachment://${proofFilename}` : undefined;
-  const executedText = params.proofText?.trim() || params.taskText?.trim() || undefined;
+  const executedText = params.taskText?.trim() || undefined;
+  const reflectionText = params.proofText?.trim() || undefined;
   const embed = buildExecutionFeedEmbed({
     durationMs: params.durationMs,
     executedText,
+    reflectionText,
     proofImageRef,
     proofFallbackText: proofImageUrl,
   });

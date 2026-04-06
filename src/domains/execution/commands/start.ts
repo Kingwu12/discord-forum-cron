@@ -1,6 +1,6 @@
 import { type ChatInputCommandInteraction, MessageFlags, SlashCommandBuilder } from 'discord.js';
 
-import { createActiveLoopPanelMessage, ensureExecutionPanel } from '../../../bot/execution-panel';
+import { createActiveLoopPanelMessage, ensureActiveLoopPanelForOpenLoop, ensureExecutionPanel } from '../../../bot/execution-panel';
 import { buildAlreadyOpenLoopReply } from '../formatters/open-loop-link';
 import { executionLog } from '../../../shared/logging';
 import { executionAccessService, toExecutionAccessContext } from '../services/execution-access-service';
@@ -76,13 +76,14 @@ export async function handleStartCommand(interaction: ChatInputCommandInteractio
     });
 
     if (!result.ok) {
+      const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, result.openLoop);
       executionLog.info('loop_open_blocked_existing_open', {
         userId: interaction.user.id,
         guildId: interaction.guildId,
         channelId: interaction.channelId,
-        loopId: result.openLoop.loopId,
+        loopId: healedOpenLoop.loopId,
       });
-      await interaction.editReply({ content: buildAlreadyOpenLoopReply(result.openLoop) });
+      await interaction.editReply({ content: buildAlreadyOpenLoopReply(healedOpenLoop) });
       return;
     }
 

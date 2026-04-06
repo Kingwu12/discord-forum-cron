@@ -10,6 +10,7 @@ import {
   handleExecutionModalSubmit,
   handleExecutionPanelButton,
   refreshExecutionPanelIfActive,
+  restoreOrphanedActiveLoopPanels,
 } from './execution-panel';
 
 const token = process.env.DISCORD_BOT_TOKEN;
@@ -30,6 +31,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   if (!panelResult.ok) {
     console.warn(`Execution panel: ${panelResult.reason}`);
   }
+  await restoreOrphanedActiveLoopPanels(readyClient);
 
   let panelRefreshInFlight = false;
   setInterval(async () => {

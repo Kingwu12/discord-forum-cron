@@ -30,6 +30,7 @@ import { sanitizeCommitmentDisplay } from '../domains/execution/formatters/loop-
 import { executionAccessService, toExecutionAccessContext } from '../domains/execution/services/execution-access-service';
 import { LoopService } from '../domains/execution/services/loop-service';
 import { buildTodayClosedLoopsSummaryForContext } from '../domains/execution/services/today-loops-summary';
+import type { OpenLoop } from '../domains/execution/types/execution.types';
 import { executionLog } from '../shared/logging';
 
 const loopService = new LoopService();
@@ -147,9 +148,7 @@ async function buildPanelEmbed(
   const guild = await client.guilds.fetch(guildId).catch(() => null);
   const activeEntries = await Promise.all(
     shown.map(async (loop) => {
-      const member = guild ? await guild.members.fetch(loop.discordUserId).catch(() => null) : null;
-      const name = member?.displayName ?? `<@${loop.discordUserId}>`;
-      return `▸ ${name} — ${formatElapsedCompact(loop.openedAt)}`;
+      return `▸ <@${loop.discordUserId}> — ${formatElapsedCompact(loop.openedAt)}`;
     }),
   );
   const remainder = Math.max(0, activeCount - activeEntries.length);
@@ -328,6 +327,49 @@ export async function createActiveLoopPanelMessage(
   });
   if (!msg) return;
   await openLoopRepo.setLoopPanelRef(openLoop.discordUserId, msg.id, channel.id);
+}
+
+async function fetchActiveLoopPanelMessage(
+  client: Client,
+  openLoop: {
+    guildId: string;
+    loopPanelChannelId?: string;
+    loopPanelMessageId?: string;
+  },
+): Promise<Message | null> {
+  if (!openLoop.loopPanelMessageId) return null;
+  const guild = await client.guilds.fetch(openLoop.guildId).catch(() => null);
+  if (!guild) return null;
+  const targetChannelId = openLoop.loopPanelChannelId || getActiveLoopsChannelId();
+  const channel = await guild.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) return null;
+  return channel.messages.fetch(openLoop.loopPanelMessageId).catch(() => null);
+}
+
+export async function ensureActiveLoopPanelForOpenLoop(
+  client: Client,
+  openLoop: OpenLoop,
+): Promise<OpenLoop> {
+  const existingMessage = await fetchActiveLoopPanelMessage(client, openLoop);
+  if (existingMessage) return openLoop;
+  await createActiveLoopPanelMessage(client, openLoop);
+  const refreshed = await openLoopRepo.getOpenLoop(openLoop.discordUserId);
+  return refreshed ?? openLoop;
+}
+
+export async function restoreOrphanedActiveLoopPanels(client: Client): Promise<void> {
+  const openLoops = await openLoopRepo.listAllOpenLoops(500);
+  for (const openLoop of openLoops) {
+    const beforeMessageId = openLoop.loopPanelMessageId;
+    const healed = await ensureActiveLoopPanelForOpenLoop(client, openLoop);
+    if (healed.loopPanelMessageId && healed.loopPanelMessageId !== beforeMessageId) {
+      executionLog.info('active_loop_panel_restored', {
+        sessionId: openLoop.loopId,
+        userId: openLoop.discordUserId,
+        messageId: healed.loopPanelMessageId,
+      });
+    }
+  }
 }
 
 export async function deleteActiveLoopPanelMessage(
@@ -515,7 +557,14 @@ export async function ensureExecutionPanel(
 
   try {
     if (panelMessage) {
-      await panelMessage.edit({ content: null, embeds: [embed], components });
+      await panelMessage.edit({
+        content: null,
+        embeds: [embed],
+        components,
+        allowedMentions: {
+          users: [],
+        },
+      });
       await panelStateRepo.setPanelMessageId(guildId, channelId, panelMessage.id);
       executionLog.info('execution_panel_restored', {
         guildId,
@@ -538,7 +587,13 @@ export async function ensureExecutionPanel(
       };
     }
 
-    const created = await textChannel.send({ embeds: [embed], components });
+    const created = await textChannel.send({
+      embeds: [embed],
+      components,
+      allowedMentions: {
+        users: [],
+      },
+    });
     await panelStateRepo.setPanelMessageId(guildId, channelId, created.id);
     executionLog.info('execution_panel_created', {
       guildId,
@@ -605,6 +660,9 @@ export async function refreshExecutionPanelIfActive(client: Client): Promise<voi
       content: null,
       embeds: [embed],
       components: buildPanelComponents(guildId, Math.max(0, openLoops.length - ACTIVE_VISIBLE_LIMIT)),
+      allowedMentions: {
+        users: [],
+      },
     });
     lastIntervalRenderByContext.set(contextKey, signature);
     executionLog.info('execution_panel_updated', {
@@ -694,15 +752,16 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
     try {
       const existingOpen = await loopService.getOpenLoopForUser(userId);
       if (existingOpen) {
+        const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, existingOpen);
         executionLog.info('loop_open_blocked_existing_open', {
           userId,
           guildId,
           channelId,
-          loopId: existingOpen.loopId,
+          loopId: healedOpenLoop.loopId,
           source: 'panel_modal',
         });
         await interaction.editReply({
-          content: buildAlreadyOpenLoopReply(existingOpen),
+          content: buildAlreadyOpenLoopReply(healedOpenLoop),
         });
         return true;
       }
@@ -715,15 +774,16 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
       });
 
       if (!result.ok) {
+        const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, result.openLoop);
         executionLog.info('loop_open_blocked_existing_open', {
           userId,
           guildId,
           channelId,
-          loopId: result.openLoop.loopId,
+          loopId: healedOpenLoop.loopId,
           source: 'panel_modal',
         });
         await interaction.editReply({
-          content: buildAlreadyOpenLoopReply(result.openLoop),
+          content: buildAlreadyOpenLoopReply(healedOpenLoop),
         });
         return true;
       }
@@ -825,15 +885,16 @@ async function handleOpenButton(interaction: ButtonInteraction): Promise<void> {
 
   const open = await loopService.getOpenLoopForUser(userId);
   if (open) {
+    const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, open);
     executionLog.info('loop_open_blocked_existing_open', {
       userId,
       guildId,
       channelId,
-      loopId: open.loopId,
+      loopId: healedOpenLoop.loopId,
       source: 'panel',
     });
     await interaction.reply({
-      content: buildAlreadyOpenLoopReply(open),
+      content: buildAlreadyOpenLoopReply(healedOpenLoop),
       ephemeral: true,
     });
     return;

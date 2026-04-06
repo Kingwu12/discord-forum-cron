@@ -182,4 +182,27 @@ export class ClosedLoopRepo {
     const dateKey = getTodayDateKey(timeZone);
     return getZonedDayUtcRange(dateKey, timeZone);
   }
+
+  /** Closed loops in context with `closedAt` in `[startMs, endMsExclusive)`. */
+  async listClosedInContextByClosedAtRange(
+    guildId: string,
+    channelId: string,
+    range: TimestampRange,
+  ): Promise<Array<ClosedLoop & { id: string }>> {
+    const q = await this.collection()
+      .where('guildId', '==', guildId)
+      .where('channelId', '==', channelId)
+      .where('closedAt', '>=', range.startMs)
+      .where('closedAt', '<', range.endMsExclusive)
+      .limit(MAX_RANGE_QUERY)
+      .get();
+
+    const loops: Array<ClosedLoop & { id: string }> = [];
+    for (const doc of q.docs) {
+      const mapped = mapSnapshotToClosedLoop(doc);
+      if (mapped) loops.push(mapped);
+    }
+    loops.sort((a, b) => a.closedAt - b.closedAt);
+    return loops;
+  }
 }

@@ -16,21 +16,23 @@ import {
 
 import {
   getExecutionPanelChannelId,
+  getExecutionFeedChannelId,
   getExecutionPanelGuildId,
   isExecutionPanelConfigured,
 } from '../config/execution-panel-env';
+import { ClosedLoopRepo } from '../domains/execution/repositories/closed-loop-repo';
 import { ExecutionPanelStateRepo } from '../domains/execution/repositories/execution-panel-state-repo';
 import { OpenLoopRepo } from '../domains/execution/repositories/open-loop-repo';
 import { executionAccessService, toExecutionAccessContext } from '../domains/execution/services/execution-access-service';
+import { buildSuggestedClosePost } from '../domains/execution/formatters/execution-feed-formatter';
 import { LoopService } from '../domains/execution/services/loop-service';
-import { buildTodayLoopsSummaryForUser } from '../domains/execution/services/today-loops-summary';
+import { buildTodayClosedLoopsSummaryForContext, buildTodayLoopsSummaryForUser } from '../domains/execution/services/today-loops-summary';
 import { executionLog } from '../shared/logging';
-
-import { sendExecutionCompleteToFeed } from './execution-feed-channel';
 
 const loopService = new LoopService();
 const panelStateRepo = new ExecutionPanelStateRepo();
 const openLoopRepo = new OpenLoopRepo();
+const closedLoopRepo = new ClosedLoopRepo();
 
 export const PANEL_BUTTON_OPEN = 'citadel:exec:open';
 export const PANEL_BUTTON_CLOSE = 'citadel:exec:close';
@@ -42,8 +44,10 @@ const INPUT_PROOF = 'proof';
 const INPUT_REFLECTION = 'reflection';
 const PRESENCE_NAME_LIMIT = 3;
 const CLOSE_PROOF_REQUIRED_MESSAGE = 'Drop proof before closing — one line or an image is enough.';
+const OPEN_INTENTION_INVALID_MESSAGE = 'Be specific — what are you actually building or doing?';
 const ACTIVE_INTENTION_PREVIEW_LIMIT = 90;
 const YOU_INTENTION_PREVIEW_LIMIT = 120;
+const OPEN_INTENTION_MIN_LENGTH = 8;
 
 export type EnsurePanelResult =
   | { ok: true; action: 'created' | 'updated'; panelMessageId: string }
@@ -84,18 +88,45 @@ function messageIsOurPanel(message: Message, clientId: string | undefined): bool
   return false;
 }
 
-/** Restrained dark bar — reads as instrumentation, not marketing. */
-const PANEL_EMBED_COLOR = 0x1e1f22;
+const PANEL_EMBED_COLOR_ACTIVE = 0x00ff94;
+const PANEL_EMBED_COLOR_IDLE = 0xff3b3b;
 
-function formatElapsedIn(openedAt: number): string {
+function formatElapsedCompact(openedAt: number): string {
   const elapsedMs = Math.max(0, Date.now() - openedAt);
   const minutes = Math.floor(elapsedMs / 60000);
-  if (minutes < 1) return 'just started';
-  if (minutes < 60) return `${minutes} min in`;
+  if (minutes < 1) return '<1m';
+  if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const remMin = minutes % 60;
-  if (remMin === 0) return `${hours} hr in`;
-  return `${hours} hr ${remMin} min in`;
+  if (remMin === 0) return `${hours}h`;
+  return `${hours}h ${remMin}m`;
+}
+
+function isNonWorkIntention(text: string): boolean {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s']/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const nonWorkPatterns = [
+    /^(just\s+)?survive$/,
+    /^(just\s+)?exist$/,
+    /^(just\s+)?don'?t die$/,
+    /^(just\s+)?stay alive$/,
+  ];
+  return nonWorkPatterns.some((pattern) => pattern.test(normalized));
+}
+
+function isFirestoreMissingIndexError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const o = err as { code?: number | string; message?: string; details?: string };
+  const message = `${o.message ?? ''} ${o.details ?? ''}`.toLowerCase();
+  return (
+    o.code === 9 ||
+    o.code === '9' ||
+    (message.includes('failed_precondition') && message.includes('requires an index'))
+  );
 }
 
 async function buildPanelEmbed(
@@ -116,14 +147,13 @@ async function buildPanelEmbed(
       const intention = compactIntention.length > ACTIVE_INTENTION_PREVIEW_LIMIT
         ? `${compactIntention.slice(0, ACTIVE_INTENTION_PREVIEW_LIMIT - 1)}...`
         : compactIntention;
-      return `${name} — ${intention || '—'}`;
+      return `▸ ${name} — ${intention || '—'}  [${formatElapsedCompact(loop.openedAt)}]`;
     }),
   );
   const remainder = Math.max(0, activeCount - activeEntries.length);
-  const namesLine = activeEntries.length > 0
+  const activeValue = activeEntries.length > 0
     ? `${activeEntries.join('\n')}${remainder > 0 ? `\n+${remainder} more` : ''}`
-    : 'Idle';
-  const activeLine = `${activeCount} working`;
+    : '0 executing';
   const focusOpenLoop = focusUserId
     ? openLoops.find((loop) => loop.discordUserId === focusUserId) ?? null
     : null;
@@ -133,24 +163,39 @@ async function buildPanelEmbed(
       const intention = compactIntention.length > YOU_INTENTION_PREVIEW_LIMIT
         ? `${compactIntention.slice(0, YOU_INTENTION_PREVIEW_LIMIT - 1)}...`
         : compactIntention;
-      return `${intention || '—'}\n${formatElapsedIn(focusOpenLoop.openedAt)}`;
+      return `▸ ${intention || '—'}  [${formatElapsedCompact(focusOpenLoop.openedAt)}]`;
     })()
-    : 'You — Idle';
+    : 'Idle';
+  let todayValue = '—';
+  try {
+    const todayRange = closedLoopRepo.todayRange();
+    const closedToday = await closedLoopRepo.listClosedInContextByClosedAtRange(
+      guildId,
+      channelId,
+      todayRange,
+    );
+    todayValue = `${closedToday.length} loops closed`;
+  } catch (err) {
+    if (isFirestoreMissingIndexError(err)) {
+      executionLog.warn('execution_panel_today_count_unavailable_missing_index', {
+        guildId,
+        channelId,
+      });
+    } else {
+      throw err;
+    }
+  }
 
   return new EmbedBuilder()
-    .setColor(PANEL_EMBED_COLOR)
-    .setTitle('CITADEL')
+    .setColor(activeCount > 0 ? PANEL_EMBED_COLOR_ACTIVE : PANEL_EMBED_COLOR_IDLE)
     .setDescription('● LIVE')
     .addFields(
-      { name: '\u200b', value: '\u200b', inline: false },
-      { name: 'State', value: 'LIVE', inline: false },
-      { name: '\u200b', value: '\u200b', inline: false },
-      { name: 'Active', value: `${activeLine}\n${namesLine}`, inline: false },
-      { name: '\u200b', value: '\u200b', inline: false },
-      { name: 'You', value: youLine, inline: false },
-      { name: '\u200b', value: '\u200b', inline: false },
-      { name: 'Protocol', value: 'open → execute → close', inline: false },
-    );
+      { name: '◈ ACTIVE', value: activeValue, inline: false },
+      { name: '◈ YOU', value: youLine, inline: true },
+      { name: '◈ TODAY', value: todayValue, inline: true },
+    )
+    .setFooter({ text: 'open → execute → close' })
+    .setTimestamp(new Date());
 }
 
 function buildPanelComponents(): ActionRowBuilder<ButtonBuilder>[] {
@@ -367,8 +412,8 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
   if (customId === MODAL_START) {
     const commitmentRaw = interaction.fields.getTextInputValue(INPUT_COMMITMENT).trim();
     const commitment = commitmentRaw.replace(/\r?\n/g, ' ').trim();
-    if (!commitment) {
-      await interaction.reply({ content: 'Required.', ephemeral: true });
+    if (commitment.length < OPEN_INTENTION_MIN_LENGTH || isNonWorkIntention(commitment)) {
+      await interaction.reply({ content: OPEN_INTENTION_INVALID_MESSAGE, ephemeral: true });
       return true;
     }
 
@@ -545,16 +590,21 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
       });
 
       await ensureExecutionPanel(interaction.client, { source: 'panel_close', userId });
-      await sendExecutionCompleteToFeed(interaction.client, {
-        userId,
+      const suggestedPost = buildSuggestedClosePost({
         durationMs: result.closedLoop.openDurationMs,
-        taskText: result.closedLoop.commitmentText,
+        executedText: result.closedLoop.commitmentText,
         proofText: result.closedLoop.proofText,
         reflectionStatus: result.closedLoop.reflectionStatus,
-        proofAttachmentUrls: result.closedLoop.proofAttachmentUrls,
       });
-
-      await interaction.deleteReply().catch(() => {});
+      await interaction.editReply({
+        content: [
+          `Loop closed. Post it in <#${getExecutionFeedChannelId()}>.`,
+          '',
+          '```',
+          suggestedPost,
+          '```',
+        ].join('\n'),
+      });
     } catch (err) {
       console.error('[citadel] MODAL_END error', err);
       executionLog.error(
@@ -673,7 +723,14 @@ async function handleTodayButton(interaction: ButtonInteraction): Promise<void> 
       channelId: interaction.channelId!,
       source: 'panel',
     });
-    const content = await buildTodayLoopsSummaryForUser(interaction.user.id);
+    const content = await buildTodayClosedLoopsSummaryForContext({
+      guildId: interaction.guildId!,
+      channelId: interaction.channelId!,
+      resolveDisplayName: async (discordUserId: string) => {
+        const member = await interaction.guild?.members.fetch(discordUserId).catch(() => null);
+        return member?.displayName ?? `<@${discordUserId}>`;
+      },
+    });
     await interaction.editReply({ content });
   } catch (err) {
     executionLog.error(

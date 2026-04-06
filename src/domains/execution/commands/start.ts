@@ -110,7 +110,7 @@ export async function handleStartCommand(
       loopId: result.openLoop.loopId,
     });
 
-    await ensureExecutionPanel(interaction.client, { source: 'slash_open' });
+    await ensureExecutionPanel(interaction.client, { source: 'slash_open', userId: interaction.user.id });
     await interaction.editReply({ content: '\u200b' });
     setTimeout(() => {
       void interaction.deleteReply().catch(() => {});

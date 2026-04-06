@@ -1,10 +1,6 @@
-import { EmbedBuilder } from 'discord.js';
-
 import type { ReflectionStatus } from '../types/execution.types';
 
 import { sanitizeCommitmentDisplay } from './loop-formatters';
-
-const FEED_EMBED_COLOR = 0x1e1f22;
 
 /** Human-readable duration for execution output (e.g. 42m, 1h 5m). */
 export function formatExecutionDurationShort(ms: number): string {
@@ -16,37 +12,26 @@ export function formatExecutionDurationShort(ms: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
-export type ExecutionCompleteFeedParams = {
-  userId: string;
-  actorName?: string;
-  actorAvatarUrl?: string;
+export type SuggestedClosePostParams = {
   durationMs: number;
-  /** Text from when the loop was opened. */
-  taskText: string;
+  executedText: string;
   proofText?: string;
   reflectionStatus: ReflectionStatus;
-  proofAttachmentUrls?: string[];
 };
 
-export function buildExecutionCompleteEmbed(p: ExecutionCompleteFeedParams): EmbedBuilder {
-  const actor = p.actorName?.trim() || `<@${p.userId}>`;
+export function buildSuggestedClosePost(p: SuggestedClosePostParams): string {
   const duration = formatExecutionDurationShort(p.durationMs);
-  const executed = sanitizeCommitmentDisplay(p.taskText, 500) || '—';
+  const executed = sanitizeCommitmentDisplay(p.executedText, 500) || '—';
   const proofText = p.proofText ? sanitizeCommitmentDisplay(p.proofText, 700) : undefined;
-  const proofValue = proofText ?? (p.proofAttachmentUrls?.length ? 'Attachment' : undefined);
-  const proofLine = proofValue ?? `${p.reflectionStatus}`;
+  const lines = [
+    'closed a loop',
+    `"${executed}"`,
+    `duration: ${duration}`,
+    `state: ${p.reflectionStatus}`,
+  ];
+  if (proofText) {
+    lines.push(`proof: ${proofText}`);
+  }
 
-  return new EmbedBuilder()
-    .setColor(FEED_EMBED_COLOR)
-    .setTitle('Loop closed')
-    .setAuthor({
-      name: actor,
-      iconURL: p.actorAvatarUrl,
-    })
-    .addFields(
-      { name: 'Duration', value: duration, inline: true },
-      { name: 'Executed', value: `"${executed}"`, inline: false },
-      { name: 'Proof', value: proofLine, inline: false },
-    )
-    .setFooter({ text: 'CITADEL // execution feed' });
+  return lines.join('\n');
 }

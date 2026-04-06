@@ -27,7 +27,10 @@ import { OpenLoopRepo } from '../domains/execution/repositories/open-loop-repo';
 import { formatElapsedCompact } from '../domains/execution/formatters/loop-cockpit-embed';
 import { buildAlreadyOpenLoopReply } from '../domains/execution/formatters/open-loop-link';
 import { sanitizeCommitmentDisplay } from '../domains/execution/formatters/loop-formatters';
-import { executionAccessService, toExecutionAccessContext } from '../domains/execution/services/execution-access-service';
+import {
+  executionAccessService,
+  toExecutionAccessContext,
+} from '../domains/execution/services/execution-access-service';
 import { LoopService } from '../domains/execution/services/loop-service';
 import { buildTodayClosedLoopsSummaryForContext } from '../domains/execution/services/today-loops-summary';
 import type { OpenLoop } from '../domains/execution/types/execution.types';
@@ -121,9 +124,7 @@ function isFirestoreMissingIndexError(err: unknown): boolean {
   const o = err as { code?: number | string; message?: string; details?: string };
   const message = `${o.message ?? ''} ${o.details ?? ''}`.toLowerCase();
   return (
-    o.code === 9 ||
-    o.code === '9' ||
-    (message.includes('failed_precondition') && message.includes('requires an index'))
+    o.code === 9 || o.code === '9' || (message.includes('failed_precondition') && message.includes('requires an index'))
   );
 }
 
@@ -152,24 +153,16 @@ async function buildPanelEmbed(
     }),
   );
   const remainder = Math.max(0, activeCount - activeEntries.length);
-  const activeValue = activeEntries.length > 0
-    ? [...activeEntries, remainder > 0 ? `+${remainder}` : '']
-      .filter(Boolean)
-      .join('\n')
-    : 'No active loops.';
+  const activeValue =
+    activeEntries.length > 0
+      ? [...activeEntries, remainder > 0 ? `+${remainder}` : ''].filter(Boolean).join('\n')
+      : 'No active loops.';
   let todayValue = '—';
   let totalValue = '—';
   try {
     const todayRange = closedLoopRepo.todayRange();
-    const closedToday = await closedLoopRepo.countClosedInContextByClosedAtRange(
-      guildId,
-      channelId,
-      todayRange,
-    );
-    const totalClosed = await closedLoopRepo.countClosedInContextAllTime(
-      guildId,
-      channelId,
-    );
+    const closedToday = await closedLoopRepo.countClosedInContextByClosedAtRange(guildId, channelId, todayRange);
+    const totalClosed = await closedLoopRepo.countClosedInContextAllTime(guildId, channelId);
     todayValue = String(closedToday);
     totalValue = String(totalClosed);
   } catch (err) {
@@ -199,14 +192,8 @@ async function buildPanelEmbed(
 
 function buildPanelComponents(guildId: string, overflowCount: number): ActionRowBuilder<ButtonBuilder>[] {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(PANEL_BUTTON_OPEN)
-      .setLabel('Open Loop')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(PANEL_BUTTON_TODAY)
-      .setLabel('Today')
-      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(PANEL_BUTTON_OPEN).setLabel('Open Loop').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(PANEL_BUTTON_TODAY).setLabel('Today').setStyle(ButtonStyle.Secondary),
   );
   if (overflowCount > 0) {
     row.addComponents(
@@ -234,7 +221,8 @@ function buildStartModal(): ModalBuilder {
           .setLabel('DEFINE EXECUTION')
           .setStyle(TextInputStyle.Short)
           .setMaxLength(400)
-          .setRequired(true),
+          .setRequired(true)
+          .setPlaceholder('e.g. build login flow, finish lecture notes, edit 3 clips'),
       ),
     );
 }
@@ -293,7 +281,10 @@ function buildActiveLoopPanelEmbed(params: {
     );
 }
 
-function buildActiveLoopPanelComponents(ownerUserId: string, status: 'active' | 'awaiting_snap'): ActionRowBuilder<ButtonBuilder>[] {
+function buildActiveLoopPanelComponents(
+  ownerUserId: string,
+  status: 'active' | 'awaiting_snap',
+): ActionRowBuilder<ButtonBuilder>[] {
   const isAwaitingSnap = status === 'awaiting_snap';
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -321,7 +312,9 @@ export async function createActiveLoopPanelMessage(
   const msg = await sendUserStyledChannelMessage(client, {
     channel,
     userId: openLoop.discordUserId,
-    embeds: [buildActiveLoopPanelEmbed({ taskText: openLoop.commitmentText, openedAt: openLoop.openedAt, status: 'active' })],
+    embeds: [
+      buildActiveLoopPanelEmbed({ taskText: openLoop.commitmentText, openedAt: openLoop.openedAt, status: 'active' }),
+    ],
     components: buildActiveLoopPanelComponents(openLoop.discordUserId, 'active'),
     logPrefix: 'active_loop_panel',
   });
@@ -346,10 +339,7 @@ async function fetchActiveLoopPanelMessage(
   return channel.messages.fetch(openLoop.loopPanelMessageId).catch(() => null);
 }
 
-export async function ensureActiveLoopPanelForOpenLoop(
-  client: Client,
-  openLoop: OpenLoop,
-): Promise<OpenLoop> {
+export async function ensureActiveLoopPanelForOpenLoop(client: Client, openLoop: OpenLoop): Promise<OpenLoop> {
   const existingMessage = await fetchActiveLoopPanelMessage(client, openLoop);
   if (existingMessage) return openLoop;
   await createActiveLoopPanelMessage(client, openLoop);
@@ -386,7 +376,10 @@ export async function deleteActiveLoopPanelMessage(
   const targetChannelId = openLoop.loopPanelChannelId || getActiveLoopsChannelId();
   const channel = await guild.channels.fetch(targetChannelId).catch(() => null);
   if (!channel || !channel.isTextBased()) return;
-  await channel.messages.fetch(openLoop.loopPanelMessageId).then((m) => m.delete()).catch(() => {});
+  await channel.messages
+    .fetch(openLoop.loopPanelMessageId)
+    .then((m) => m.delete())
+    .catch(() => {});
 }
 
 export async function markActiveLoopAwaitingSnap(
@@ -407,12 +400,21 @@ export async function markActiveLoopAwaitingSnap(
   const targetChannelId = openLoop.loopPanelChannelId || getActiveLoopsChannelId();
   const channel = await guild.channels.fetch(targetChannelId).catch(() => null);
   if (!channel || !channel.isTextBased()) return;
-  await channel.messages.fetch(openLoop.loopPanelMessageId).then((msg) =>
-    msg.edit({
-      embeds: [buildActiveLoopPanelEmbed({ taskText: openLoop.commitmentText, openedAt: openLoop.openedAt, status: 'awaiting_snap' })],
-      components: buildActiveLoopPanelComponents(openLoop.discordUserId, 'awaiting_snap'),
-    }),
-  ).catch(() => {});
+  await channel.messages
+    .fetch(openLoop.loopPanelMessageId)
+    .then((msg) =>
+      msg.edit({
+        embeds: [
+          buildActiveLoopPanelEmbed({
+            taskText: openLoop.commitmentText,
+            openedAt: openLoop.openedAt,
+            status: 'awaiting_snap',
+          }),
+        ],
+        components: buildActiveLoopPanelComponents(openLoop.discordUserId, 'awaiting_snap'),
+      }),
+    )
+    .catch(() => {});
 }
 
 function isImageAttachment(att: { contentType: string | null; name: string | null }): boolean {
@@ -492,19 +494,17 @@ function panelRenderSignature(embed: EmbedBuilder): string {
 /**
  * Creates or refreshes the single control-panel message; dedupes older panel copies in-channel.
  */
-export async function ensureExecutionPanel(
-  client: Client,
-  logExtra: PanelLogExtra = {},
-): Promise<EnsurePanelResult> {
+export async function ensureExecutionPanel(client: Client, logExtra: PanelLogExtra = {}): Promise<EnsurePanelResult> {
   if (!isExecutionPanelConfigured()) {
     return { ok: false, reason: 'not_configured' };
   }
 
   const guildId = getExecutionPanelGuildId();
   const channelId = getExecutionPanelChannelId();
-  const focusUserId = typeof logExtra.userId === 'string' && logExtra.userId.length > 0
-    ? logExtra.userId
-    : await panelStateRepo.getFocusUserId(guildId, channelId);
+  const focusUserId =
+    typeof logExtra.userId === 'string' && logExtra.userId.length > 0
+      ? logExtra.userId
+      : await panelStateRepo.getFocusUserId(guildId, channelId);
   if (typeof logExtra.userId === 'string' && logExtra.userId.length > 0) {
     await panelStateRepo.setFocusUserId(guildId, channelId, logExtra.userId);
   }
@@ -703,9 +703,10 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
   }
 
   const ctx = toExecutionAccessContext(interaction);
-  const canUseExecution = customId === MODAL_END
-    ? executionAccessService.isExecutionEnabledForGuild(ctx.guildId)
-    : executionAccessService.canUseExecutionCommand(ctx);
+  const canUseExecution =
+    customId === MODAL_END
+      ? executionAccessService.isExecutionEnabledForGuild(ctx.guildId)
+      : executionAccessService.canUseExecutionCommand(ctx);
   if (!canUseExecution) {
     await interaction.reply({ content: 'Execution is not available here.', ephemeral: true }).catch(() => {});
     return true;
@@ -738,14 +739,8 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
       await interaction.deferReply({ ephemeral: true });
     } catch (deferErr) {
       console.error('[citadel] MODAL_START deferReply failed', deferErr);
-      executionLog.error(
-        'loop_open_defer_failed',
-        { userId, guildId, channelId, source: 'panel_modal' },
-        deferErr,
-      );
-      await interaction
-        .reply({ content: 'Unable to open loop.', ephemeral: true })
-        .catch(() => {});
+      executionLog.error('loop_open_defer_failed', { userId, guildId, channelId, source: 'panel_modal' }, deferErr);
+      await interaction.reply({ content: 'Unable to open loop.', ephemeral: true }).catch(() => {});
       return true;
     }
 
@@ -816,10 +811,12 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
   }
 
   if (customId === MODAL_END) {
-    await interaction.reply({
-      content: 'Close modal is disabled. Click Close Loop, then upload one image in this channel.',
-      ephemeral: true,
-    }).catch(() => {});
+    await interaction
+      .reply({
+        content: 'Close modal is disabled. Click Close Loop, then upload one image in this channel.',
+        ephemeral: true,
+      })
+      .catch(() => {});
     return true;
   }
 
@@ -837,14 +834,16 @@ export async function handleExecutionPanelButton(interaction: ButtonInteraction)
     return true;
   }
 
-  const isMainPanelButton = customId === PANEL_BUTTON_OPEN || customId === PANEL_BUTTON_TODAY || customId === PANEL_BUTTON_ACTIVE_MORE;
+  const isMainPanelButton =
+    customId === PANEL_BUTTON_OPEN || customId === PANEL_BUTTON_TODAY || customId === PANEL_BUTTON_ACTIVE_MORE;
   if (isMainPanelButton && !isConfiguredPanelChannel(loc.guildId, loc.channelId)) {
-    await interaction
-      .reply({ content: 'Use the panel channel.', ephemeral: true })
-      .catch(() => {});
+    await interaction.reply({ content: 'Use the panel channel.', ephemeral: true }).catch(() => {});
     return true;
   }
-  if (customId.startsWith(LOOP_PANEL_BUTTON_CLOSE_PREFIX) && !isConfiguredActiveLoopsChannel(loc.guildId, loc.channelId)) {
+  if (
+    customId.startsWith(LOOP_PANEL_BUTTON_CLOSE_PREFIX) &&
+    !isConfiguredActiveLoopsChannel(loc.guildId, loc.channelId)
+  ) {
     await interaction.reply({ content: 'Use the active-loops channel.', ephemeral: true }).catch(() => {});
     return true;
   }
@@ -903,10 +902,7 @@ async function handleOpenButton(interaction: ButtonInteraction): Promise<void> {
   await interaction.showModal(buildStartModal());
 }
 
-async function handleOwnedLoopCloseButton(
-  interaction: ButtonInteraction,
-  customId: string,
-): Promise<void> {
+async function handleOwnedLoopCloseButton(interaction: ButtonInteraction, customId: string): Promise<void> {
   const ownerUserId = ownerUserIdFromLoopPanelCloseCustomId(customId);
   if (!ownerUserId || interaction.user.id !== ownerUserId) {
     await interaction.reply({ content: 'This loop is not yours.', ephemeral: true });
@@ -977,9 +973,6 @@ async function handleActiveMoreButton(interaction: ButtonInteraction): Promise<v
       return `▸ ${name} — ${formatElapsedCompact(loop.openedAt)}`;
     }),
   );
-  const content = lines.length > 0
-    ? ['ACTIVE LOOPS', '', ...lines].join('\n')
-    : 'ACTIVE LOOPS\n\nNo active loops.';
+  const content = lines.length > 0 ? ['ACTIVE LOOPS', '', ...lines].join('\n') : 'ACTIVE LOOPS\n\nNo active loops.';
   await interaction.reply({ content, ephemeral: true });
 }
-

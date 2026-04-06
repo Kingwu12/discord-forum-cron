@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "nodemon --watch src --watch .env --ext ts,env --exec tsx src/bot/main.ts",
+    "start": "tsx src/bot/main.ts",
     "bot": "tsx src/bot/main.ts",
     "bot:register-commands": "tsx src/bot/register-commands.ts",
     "missions:daily": "node scripts/post_daily_mission.js",

@@ -6,5 +6,8 @@
 export interface GuildChannelsConfig {
   /** Kingdom / missions posts (e.g. daily mission bot channel). */
   missionsChannelId?: string;
+  /** Control surface: panel buttons / modals (not public completion log). */
   executionChannelId?: string;
+  /** Public execution output (completions, optional open-line posts). */
+  executionFeedChannelId?: string;
 }

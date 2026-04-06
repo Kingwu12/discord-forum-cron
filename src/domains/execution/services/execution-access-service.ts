@@ -21,19 +21,10 @@ function hasGuildId(guildId: string | null | undefined): guildId is string {
   return typeof guildId === 'string' && guildId.length > 0;
 }
 
-/**
- * @temporary Alpha testing — allow execution flows in any guild channel while `executionEnabled` is true.
- * Ignores `executionChannelId` pins. Set to `false` and restore per-guild pins before production.
- */
-const TEMP_IGNORE_EXECUTION_CHANNEL_PIN = true;
-
 function channelMatchesExecutionPin(
   config: GuildConfig,
   channelId: string | null | undefined,
 ): boolean {
-  if (TEMP_IGNORE_EXECUTION_CHANNEL_PIN && config.features.executionEnabled) {
-    return true;
-  }
   const pin = config.channels.executionChannelId;
   if (pin === undefined || pin === '') return true;
   return typeof channelId === 'string' && channelId === pin;

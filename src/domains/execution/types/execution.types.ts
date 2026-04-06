@@ -1,56 +1,65 @@
 /**
- * Base types for the execution domain (structure only — no persistence or commands wired yet).
+ * Execution domain — Open Loop behavioral model (OPEN → EXECUTE → CLOSE).
  */
 
 /** Discord snowflake ID as string */
 export type DiscordSnowflake = string;
 
-/**
- * Active execution session (hot path / in-flight).
- * End time and duration are tracked on {@link ExecutionSession} once complete.
- */
-export interface ExecutionActiveSession {
+export type ReflectionStatus = 'moved' | 'partial' | 'stalled';
+
+export type ProofType = 'attachment' | 'text' | 'link' | 'mixed';
+
+/** In-flight loop: at most one per user (Firestore doc id = discordUserId). */
+export interface OpenLoop {
+  loopId: string;
   discordUserId: DiscordSnowflake;
   guildId: DiscordSnowflake;
   channelId: DiscordSnowflake;
-  startedAt: number;
+  commitmentText: string;
+  status: 'open';
+  openedAt: number;
   createdAt: number;
   updatedAt: number;
 }
 
-/**
- * Persisted execution session record (completed or historical).
- */
-export interface ExecutionSession {
+/** Persisted closed loop (auto-generated Firestore doc id). */
+export interface ClosedLoop {
+  loopId: string;
   discordUserId: DiscordSnowflake;
   guildId: DiscordSnowflake;
   channelId: DiscordSnowflake;
-  startedAt: number;
-  endedAt: number;
-  durationMs: number;
+  commitmentText: string;
+  openedAt: number;
+  closedAt: number;
+  /** For logs / analytics — not shown in /today */
+  openDurationMs: number;
+  proofType: ProofType;
+  proofText?: string;
+  proofAttachmentUrls?: string[];
+  /** Discord message id of the proof submission (panel flow), if captured. */
+  proofMessageId?: string;
+  reflectionStatus: ReflectionStatus;
+  /** Optional free-text reflection (e.g. panel modal). */
+  reflectionNotes?: string;
   createdAt: number;
   updatedAt: number;
 }
 
+export type StoredClosedLoop = ClosedLoop & { id: string };
+
 /**
- * Verdict attached to an execution session (no scoring dimensions in MVP).
+ * Verdict (future) — placeholder shape.
  */
 export interface ExecutionVerdict {
-  /** Owning session record this verdict applies to */
-  sessionId: string;
+  loopId: string;
   discordUserId: DiscordSnowflake;
   guildId: DiscordSnowflake;
   channelId: DiscordSnowflake;
-  startedAt: number;
-  endedAt: number;
-  durationMs: number;
   createdAt: number;
   updatedAt: number;
 }
 
-/**
- * Per-guild execution feature configuration.
- */
+/** @deprecated Legacy — retained for config typing if needed elsewhere */
 export interface ExecutionGuildFeatures {
   guildId: DiscordSnowflake;
   createdAt: number;

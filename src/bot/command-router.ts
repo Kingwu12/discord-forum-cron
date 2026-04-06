@@ -4,6 +4,8 @@ import { handleEndCommand } from '../domains/execution/commands/end';
 import { handleStartCommand } from '../domains/execution/commands/start';
 import { handleTodayCommand } from '../domains/execution/commands/today';
 
+import { handlePanelCommand } from './panel-command';
+
 export async function routeChatInputCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
@@ -16,6 +18,9 @@ export async function routeChatInputCommand(
       return;
     case 'today':
       await handleTodayCommand(interaction);
+      return;
+    case 'panel':
+      await handlePanelCommand(interaction);
       return;
     default:
       await interaction.reply({

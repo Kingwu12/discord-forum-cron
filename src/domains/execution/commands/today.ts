@@ -1,18 +1,17 @@
 import {
   type ChatInputCommandInteraction,
+  MessageFlags,
   SlashCommandBuilder,
 } from 'discord.js';
 
-import { formatTodayExecutionSummary } from '../formatters/session-summary-formatter';
-import { SessionRepo } from '../repositories/session-repo';
+import { executionLog } from '../../../shared/logging';
 import { executionAccessService, toExecutionAccessContext } from '../services/execution-access-service';
+import { buildTodayLoopsSummaryForUser } from '../services/today-loops-summary';
 import { START_REPLY_DENIED, START_REPLY_ERROR } from './start';
-
-const sessionRepo = new SessionRepo();
 
 export const todaySlashCommand = new SlashCommandBuilder()
   .setName('today')
-  .setDescription("See today's completed execution sessions");
+  .setDescription("Today's loops");
 
 export async function handleTodayCommand(
   interaction: ChatInputCommandInteraction,
@@ -24,7 +23,7 @@ export async function handleTodayCommand(
   ) {
     await interaction.reply({
       content: START_REPLY_DENIED,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -33,24 +32,38 @@ export async function handleTodayCommand(
   if (!executionAccessService.canUseExecutionCommand(ctx)) {
     await interaction.reply({
       content: START_REPLY_DENIED,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   try {
-    const sessions = await sessionRepo.getTodaySessionsByUser(interaction.user.id);
-    const totalMs = sessions.reduce((sum, s) => sum + s.durationMs, 0);
-    const content = formatTodayExecutionSummary(sessions.length, totalMs);
+    executionLog.info('today_summary_requested', {
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      source: 'slash',
+    });
+
+    const content = await buildTodayLoopsSummaryForUser(interaction.user.id);
 
     await interaction.reply({
       content,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
-  } catch {
+  } catch (err) {
+    executionLog.error(
+      'today_summary_error',
+      {
+        userId: interaction.user.id,
+        guildId: interaction.guildId ?? undefined,
+        channelId: interaction.channelId ?? undefined,
+      },
+      err,
+    );
     await interaction.reply({
       content: START_REPLY_ERROR,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }

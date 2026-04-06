@@ -1,33 +1,44 @@
 /**
- * Firestore collection names and path helpers for the execution domain only.
- * MVP data is Discord-native and must not share collections with Mode Labs / site backends.
+ * Firestore collection names for the execution / Open Loop domain.
+ *
+ * Legacy collections (`execution_active_sessions`, `execution_sessions`) are left in Firestore
+ * for historical data; v1 Open Loop writes use the collections below.
  *
  * Document ID strategy:
- * - execution_active_sessions: one doc per user in flight; document ID = Discord user snowflake (`discordUserId`).
- * - execution_sessions: completed / historical sessions; document ID = auto-generated (Firestore `doc()` or client UUID), assigned by the repository layer.
- * - execution_verdicts: verdict records; document ID = auto-generated, assigned by the repository layer.
+ * - execution_open_loops: one doc per user with an open loop; document ID = Discord user id.
+ * - execution_closed_loops: auto-generated IDs; query by user + openedAt / closedAt.
  */
 
-/** In-flight execution session keyed by Discord user ID. */
-export const EXECUTION_ACTIVE_SESSIONS = 'execution_active_sessions';
+/** Open loop keyed by Discord user id. */
+export const EXECUTION_OPEN_LOOPS = 'execution_open_loops';
 
-/** Completed and historical execution sessions. */
-export const EXECUTION_SESSIONS = 'execution_sessions';
+/** Closed loops (proof + reflection). */
+export const EXECUTION_CLOSED_LOOPS = 'execution_closed_loops';
 
-/** Verdicts tied to execution sessions (via fields on the document, not path). */
+/** Verdicts (future). */
 export const EXECUTION_VERDICTS = 'execution_verdicts';
 
-/** Full document path for an active session: `{collection}/{discordUserId}`. */
-export function getActiveSessionDocPath(discordUserId: string): string {
-  return `${EXECUTION_ACTIVE_SESSIONS}/${discordUserId}`;
+/** Single control-panel message id per execution channel (dedupe / restart restore). */
+export const EXECUTION_PANEL_STATE = 'execution_panel_state';
+
+export function getExecutionPanelStateDocPath(guildId: string, channelId: string): string {
+  return `${EXECUTION_PANEL_STATE}/${guildId}_${channelId}`;
 }
 
-/** Collection path segment for completed/historical sessions (top-level). */
-export function getExecutionSessionsCollectionPath(): string {
-  return EXECUTION_SESSIONS;
+/** @deprecated Historical — do not write new session-shaped docs here */
+export const EXECUTION_ACTIVE_SESSIONS = 'execution_active_sessions';
+
+/** @deprecated Historical — do not write new session-shaped docs here */
+export const EXECUTION_SESSIONS = 'execution_sessions';
+
+export function getOpenLoopDocPath(discordUserId: string): string {
+  return `${EXECUTION_OPEN_LOOPS}/${discordUserId}`;
 }
 
-/** Collection path segment for verdicts (top-level). */
+export function getExecutionClosedLoopsCollectionPath(): string {
+  return EXECUTION_CLOSED_LOOPS;
+}
+
 export function getExecutionVerdictsCollectionPath(): string {
   return EXECUTION_VERDICTS;
 }

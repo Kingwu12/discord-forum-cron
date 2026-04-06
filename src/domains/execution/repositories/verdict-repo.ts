@@ -8,7 +8,7 @@ export class VerdictRepo {
     throw new Error('VerdictRepo.save not implemented');
   }
 
-  getBySessionId(_sessionId: string): ExecutionVerdict | null {
+  getByLoopId(_loopId: string): ExecutionVerdict | null {
     return null;
   }
 }

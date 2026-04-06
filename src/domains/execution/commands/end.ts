@@ -4,20 +4,47 @@ import {
   SlashCommandBuilder,
 } from 'discord.js';
 
+import { sendExecutionCompleteToFeed } from '../../../bot/execution-feed-channel';
 import { executionLog } from '../../../shared/logging';
-import { formatPublicSessionCompleteMessage } from '../formatters/session-summary-formatter';
 import { executionAccessService, toExecutionAccessContext } from '../services/execution-access-service';
-import { ExecutionSessionService } from '../services/execution-session-service';
+import type { ReflectionStatus } from '../types/execution.types';
+import { LoopService } from '../services/loop-service';
 import { START_REPLY_DENIED, START_REPLY_ERROR } from './start';
 
-/** Ephemeral when the user has no active session to end. */
-export const END_REPLY_NO_ACTIVE_SESSION = 'You do not have an active session.';
+export const END_REPLY_NO_OPEN_LOOP = 'No open loop found.';
+export const END_REPLY_PROOF_REQUIRED = 'Required.';
 
-const executionSessionService = new ExecutionSessionService();
+const loopService = new LoopService();
+
+const REFLECTION_VALUES = new Set<ReflectionStatus>(['moved', 'partial', 'stalled']);
 
 export const endSlashCommand = new SlashCommandBuilder()
   .setName('end')
-  .setDescription('End your execution session');
+  .setDescription('Close the active loop')
+  .addStringOption((option) =>
+    option
+      .setName('reflection')
+      .setDescription('Closure state')
+      .setRequired(true)
+      .addChoices(
+        { name: 'moved', value: 'moved' },
+        { name: 'partial', value: 'partial' },
+        { name: 'stalled', value: 'stalled' },
+      ),
+  )
+  .addStringOption((option) =>
+    option
+      .setName('proof_text')
+      .setDescription('What was executed (text or link)')
+      .setRequired(false)
+      .setMaxLength(2000),
+  )
+  .addAttachmentOption((option) =>
+    option
+      .setName('proof_file')
+      .setDescription('Proof attachment')
+      .setRequired(false),
+  );
 
 export async function handleEndCommand(
   interaction: ChatInputCommandInteraction,
@@ -27,7 +54,7 @@ export async function handleEndCommand(
     interaction.guildId === null ||
     interaction.channelId === null
   ) {
-    executionLog.info('end_blocked', {
+    executionLog.info('loop_close_blocked', {
       reason: 'invalid_context',
       userId: interaction.user.id,
     });
@@ -40,7 +67,7 @@ export async function handleEndCommand(
 
   const ctx = toExecutionAccessContext(interaction);
   if (!executionAccessService.canUseExecutionCommand(ctx)) {
-    executionLog.info('end_blocked', {
+    executionLog.info('loop_close_blocked', {
       reason: 'execution_not_allowed',
       userId: interaction.user.id,
       guildId: interaction.guildId,
@@ -53,93 +80,114 @@ export async function handleEndCommand(
     return;
   }
 
-  executionLog.info('end_attempt', {
-    userId: interaction.user.id,
-    guildId: interaction.guildId,
-    channelId: interaction.channelId,
-  });
-
-  try {
-    const active = await executionSessionService.getActiveSessionForUser(interaction.user.id);
-    if (!active) {
-      executionLog.info('end_blocked', {
-        reason: 'no_active_session',
-        userId: interaction.user.id,
-        guildId: interaction.guildId,
-        channelId: interaction.channelId,
-      });
-      await interaction.reply({
-        content: END_REPLY_NO_ACTIVE_SESSION,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    // Public defer — success path must not use ephemeral (no "Only you can see this").
-    await interaction.deferReply();
-
-    const result = await executionSessionService.endSession({
-      discordUserId: interaction.user.id,
-    });
-
-    if (!result.ok) {
-      executionLog.info('end_blocked', {
-        reason: 'no_active_session',
-        userId: interaction.user.id,
-        guildId: interaction.guildId,
-        channelId: interaction.channelId,
-      });
-      await interaction.deleteReply().catch(() => {});
-      await interaction.followUp({
-        content: END_REPLY_NO_ACTIVE_SESSION,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    executionLog.info('end_success', {
+  const open = await loopService.getOpenLoopForUser(interaction.user.id);
+  if (!open) {
+    executionLog.info('loop_close_blocked_no_open', {
       userId: interaction.user.id,
       guildId: interaction.guildId,
       channelId: interaction.channelId,
-      completedSessionId: result.completedSessionId,
     });
+    await interaction.reply({
+      content: END_REPLY_NO_OPEN_LOOP,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
 
-    const publicContent = formatPublicSessionCompleteMessage({
+  const proofFile = interaction.options.getAttachment('proof_file');
+  const proofText = interaction.options.getString('proof_text')?.trim() ?? '';
+  const hasProof = Boolean(proofFile) || proofText.length > 0;
+
+  if (!hasProof) {
+    executionLog.info('loop_close_blocked_no_proof', {
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      loopId: open.loopId,
+    });
+    await interaction.reply({
+      content: END_REPLY_PROOF_REQUIRED,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const reflectionRaw = interaction.options.getString('reflection', true) as ReflectionStatus;
+  if (!REFLECTION_VALUES.has(reflectionRaw)) {
+    await interaction.reply({
+      content: START_REPLY_ERROR,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const proofAttachmentUrls = proofFile ? [proofFile.url] : undefined;
+
+  executionLog.info('loop_close_requested', {
+    userId: interaction.user.id,
+    guildId: interaction.guildId,
+    channelId: interaction.channelId,
+    loopId: open.loopId,
+    source: 'slash',
+  });
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    const result = await loopService.closeLoop({
       discordUserId: interaction.user.id,
-      durationMs: result.completedSession.durationMs,
+      proofText: proofText.length > 0 ? proofText : undefined,
+      proofAttachmentUrls,
+      reflectionStatus: reflectionRaw,
     });
 
-    await interaction.editReply({ content: publicContent });
+    if (!result.ok) {
+      executionLog.info('loop_close_blocked_no_open', {
+        userId: interaction.user.id,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+      });
+      await interaction.editReply({ content: END_REPLY_NO_OPEN_LOOP });
+      return;
+    }
+
+    executionLog.info('loop_closed', {
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      loopId: result.closedLoop.loopId,
+      openDurationMs: result.closedLoop.openDurationMs,
+      closedLoopFirestoreId: result.closedLoopFirestoreId,
+    });
+
+    let completion =
+      result.closedLoop.proofText?.trim() ?? '';
+    if (!completion && result.closedLoop.proofAttachmentUrls?.length) {
+      completion = 'Attachment';
+    }
+    if (!completion) completion = '—';
+
+    await sendExecutionCompleteToFeed(interaction.client, {
+      userId: interaction.user.id,
+      durationMs: result.closedLoop.openDurationMs,
+      taskText: result.closedLoop.commitmentText,
+      completionText: completion,
+      reflectionStatus: result.closedLoop.reflectionStatus,
+      reflectionNotes: result.closedLoop.reflectionNotes,
+    });
+
+    await interaction.editReply({ content: 'Loop closed.' });
   } catch (err) {
     executionLog.error(
-      'end_error',
+      'loop_close_error',
       {
         userId: interaction.user.id,
         guildId: interaction.guildId ?? undefined,
         channelId: interaction.channelId ?? undefined,
+        loopId: open.loopId,
       },
       err,
     );
-    try {
-      if (interaction.deferred) {
-        await interaction.deleteReply().catch(() => {});
-        await interaction.followUp({
-          content: START_REPLY_ERROR,
-          flags: MessageFlags.Ephemeral,
-        });
-      } else if (interaction.replied) {
-        await interaction.followUp({
-          content: START_REPLY_ERROR,
-          flags: MessageFlags.Ephemeral,
-        });
-      } else {
-        await interaction.reply({
-          content: START_REPLY_ERROR,
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-    } catch {
-      /* ignore */
-    }
+    await interaction.editReply({ content: START_REPLY_ERROR }).catch(() => {});
   }
 }

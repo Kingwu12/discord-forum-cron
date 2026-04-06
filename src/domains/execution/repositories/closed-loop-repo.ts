@@ -205,4 +205,29 @@ export class ClosedLoopRepo {
     loops.sort((a, b) => a.closedAt - b.closedAt);
     return loops;
   }
+
+  async countClosedInContextByClosedAtRange(
+    guildId: string,
+    channelId: string,
+    range: TimestampRange,
+  ): Promise<number> {
+    const query = this.collection()
+      .where('guildId', '==', guildId)
+      .where('channelId', '==', channelId)
+      .where('closedAt', '>=', range.startMs)
+      .where('closedAt', '<', range.endMsExclusive);
+    const aggregate = await query.count().get();
+    return aggregate.data().count;
+  }
+
+  async countClosedInContextAllTime(
+    guildId: string,
+    channelId: string,
+  ): Promise<number> {
+    const query = this.collection()
+      .where('guildId', '==', guildId)
+      .where('channelId', '==', channelId);
+    const aggregate = await query.count().get();
+    return aggregate.data().count;
+  }
 }

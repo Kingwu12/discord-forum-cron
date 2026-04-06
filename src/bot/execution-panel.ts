@@ -158,18 +158,24 @@ async function buildPanelEmbed(
       .filter(Boolean)
       .join('\n')
     : 'No active loops.';
-  let todayValue = '— loops closed';
+  let todayValue = '—';
+  let totalValue = '—';
   try {
     const todayRange = closedLoopRepo.todayRange();
-    const closedToday = await closedLoopRepo.listClosedInContextByClosedAtRange(
+    const closedToday = await closedLoopRepo.countClosedInContextByClosedAtRange(
       guildId,
       channelId,
       todayRange,
     );
-    todayValue = `${closedToday.length} loops closed`;
+    const totalClosed = await closedLoopRepo.countClosedInContextAllTime(
+      guildId,
+      channelId,
+    );
+    todayValue = String(closedToday);
+    totalValue = String(totalClosed);
   } catch (err) {
     if (isFirestoreMissingIndexError(err)) {
-      executionLog.warn('execution_panel_today_count_unavailable_missing_index', {
+      executionLog.warn('execution_panel_metrics_unavailable_missing_index', {
         guildId,
         channelId,
       });
@@ -186,7 +192,10 @@ async function buildPanelEmbed(
     .setDescription(description)
     .addFields(
       { name: '◈ EXECUTING NOW', value: activeValue, inline: false },
-      { name: '◈ TODAY', value: todayValue, inline: true },
+      { name: '\u200B', value: '\u200B', inline: false },
+      { name: '◈ TODAY', value: todayValue, inline: false },
+      { name: '\u200B', value: '\u200B', inline: false },
+      { name: '◈ TOTAL', value: totalValue, inline: false },
     )
     .setFooter({ text: `MODE LABS · updated at ${formatPanelClock(now)}` });
 }
@@ -261,14 +270,17 @@ function buildActiveLoopPanelEmbed(params: {
   status: 'active' | 'awaiting_snap';
 }): EmbedBuilder {
   const statusLabel = params.status === 'awaiting_snap' ? 'AWAITING SNAP' : 'LIVE';
-  const helper = params.status === 'awaiting_snap' ? '\nUpload image to close.' : '';
+  const helper = params.status === 'awaiting_snap' ? '\nUPLOAD: image to close' : '';
+  const executing = sanitizeCommitmentDisplay(params.taskText, 500) || '—';
   return new EmbedBuilder()
     .setColor(0xffd700)
-    .setDescription('● LOOP OPEN')
-    .addFields(
-      { name: '◈ EXECUTING', value: sanitizeCommitmentDisplay(params.taskText, 500) || '—', inline: false },
-      { name: '◈ TIME IN', value: formatElapsedCompact(params.openedAt), inline: false },
-      { name: '◈ STATUS', value: `${statusLabel}${helper}`, inline: false },
+    .setTitle('LOOP OPEN')
+    .setDescription(
+      [
+        `EXECUTING: ${executing}`,
+        `TIME IN: ${formatElapsedCompact(params.openedAt)}`,
+        `STATUS: ${statusLabel}${helper}`,
+      ].join('\n'),
     );
 }
 
@@ -398,6 +410,14 @@ export async function handleActiveLoopsProofMessage(message: Message): Promise<b
   });
   await deleteActiveLoopPanelMessage(message.client, open);
   await ensureExecutionPanel(message.client, { source: 'proof_close', userId: message.author.id });
+  await message.delete().catch((err) => {
+    executionLog.warn('awaiting_snap_proof_message_delete_failed', {
+      userId: message.author.id,
+      channelId: message.channelId,
+      messageId: message.id,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  });
   return true;
 }
 

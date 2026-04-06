@@ -39,24 +39,27 @@ export function buildSuggestedClosePost(p: SuggestedClosePostParams): string {
 
 export function buildExecutionFeedEmbed(p: {
   durationMs: number;
-  executedText: string;
-  proofText?: string;
-  proofAttachmentUrls?: string[];
+  executedText?: string;
+  proofImageRef?: string;
+  proofFallbackText?: string;
 }): EmbedBuilder {
   const duration = formatExecutionDurationShort(p.durationMs);
-  const executed = sanitizeCommitmentDisplay(p.executedText, 500) || '—';
-  const proofText = p.proofText ? sanitizeCommitmentDisplay(p.proofText, 700) : undefined;
-  const proof = proofText || p.proofAttachmentUrls?.[0];
+  const executed = p.executedText ? sanitizeCommitmentDisplay(p.executedText, 500) : '';
+  const proofFallbackText = p.proofFallbackText
+    ? sanitizeCommitmentDisplay(p.proofFallbackText, 700)
+    : undefined;
 
   const embed = new EmbedBuilder()
-    .setTitle('Loop closed')
-    .addFields(
-      { name: 'Duration', value: duration, inline: true },
-      { name: 'Executed', value: `"${executed}"`, inline: false },
-    );
+    .setTitle('Loop closed');
 
-  if (proof) {
-    embed.addFields({ name: 'Proof', value: proof, inline: false });
+  if (executed.length > 0) {
+    embed.addFields({ name: 'EXECUTED', value: executed, inline: true });
+  }
+  embed.addFields({ name: 'DURATION', value: duration, inline: true });
+  if (p.proofImageRef) {
+    embed.setImage(p.proofImageRef);
+  } else if (proofFallbackText) {
+    embed.addFields({ name: 'Proof', value: proofFallbackText, inline: false });
   }
 
   return embed;

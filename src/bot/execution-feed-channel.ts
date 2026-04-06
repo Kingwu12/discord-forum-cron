@@ -15,6 +15,14 @@ export type ExecutionFeedPostParams = {
 
 const EXECUTION_FEED_WEBHOOK_NAME = 'Execution Feed Relay';
 
+function inferProofFilenameFromUrl(url: string): string {
+  const clean = url.split('?')[0] ?? url;
+  const tail = clean.split('/').pop() ?? '';
+  const hasImageExt = /\.(png|jpe?g|gif|webp|bmp)$/i.test(tail);
+  if (hasImageExt) return tail;
+  return 'proof.png';
+}
+
 function isWebhookCapableChannel(channel: TextBasedChannel): channel is TextBasedChannel & {
   fetchWebhooks: () => Promise<Awaited<ReturnType<TextBasedChannel['fetchWebhooks']>>>;
   createWebhook: (options: { name: string; reason?: string }) => Promise<Webhook>;
@@ -53,16 +61,21 @@ export async function sendExecutionCompleteToFeed(
     executionLog.warn('execution_feed_post_skipped_channel_missing', { channelId });
     return;
   }
+  const proofImageUrl = params.proofAttachmentUrls?.[0];
+  const proofFilename = proofImageUrl ? inferProofFilenameFromUrl(proofImageUrl) : undefined;
+  const proofImageRef = proofFilename ? `attachment://${proofFilename}` : undefined;
+  const executedText = params.proofText?.trim() || params.taskText?.trim() || undefined;
   const embed = buildExecutionFeedEmbed({
     durationMs: params.durationMs,
-    executedText: params.taskText,
-    proofText: params.proofText,
-    proofAttachmentUrls: params.proofAttachmentUrls,
+    executedText,
+    proofImageRef,
+    proofFallbackText: proofImageUrl,
   });
   await sendUserStyledChannelMessage(client, {
     channel,
     userId: params.userId,
     embeds: [embed],
+    files: proofImageUrl && proofFilename ? [{ attachment: proofImageUrl, name: proofFilename }] : undefined,
     logPrefix: 'execution_feed',
   });
 }
@@ -75,6 +88,7 @@ export async function sendUserStyledChannelMessage(
     embeds?: MessageCreateOptions['embeds'];
     content?: string;
     components?: MessageCreateOptions['components'];
+    files?: MessageCreateOptions['files'];
     logPrefix: string;
   },
 ): Promise<Message | null> {
@@ -103,6 +117,7 @@ export async function sendUserStyledChannelMessage(
       content: params.content,
       embeds: params.embeds,
       components: params.components,
+      files: params.files,
     });
     executionLog.info(`${params.logPrefix}_posted_via_webhook`, {
       channelId: channel.id,
@@ -120,6 +135,7 @@ export async function sendUserStyledChannelMessage(
       content: params.content,
       embeds: params.embeds,
       components: params.components,
+      files: params.files,
     });
     executionLog.info(`${params.logPrefix}_posted_via_bot_fallback`, {
       channelId: channel.id,

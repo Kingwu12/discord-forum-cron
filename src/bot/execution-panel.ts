@@ -53,6 +53,7 @@ export const LOOP_EXPIRED_USER_MESSAGE = 'That loop expired.\nStart a new one.';
 
 export const PANEL_BUTTON_OPEN = 'citadel:exec:open';
 export const PANEL_BUTTON_TODAY = 'citadel:exec:today';
+export const PANEL_BUTTON_MY_LOOP = 'citadel:exec:my_loop';
 export const PANEL_BUTTON_ACTIVE_MORE = 'citadel:exec:active:more';
 export const LOOP_PANEL_BUTTON_CLOSE_PREFIX = 'citadel:exec:loop:close:';
 const MODAL_START = 'citadel:modal:start';
@@ -208,6 +209,7 @@ function buildPanelComponents(guildId: string, overflowCount: number): ActionRow
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(PANEL_BUTTON_OPEN).setLabel('Open Loop').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(PANEL_BUTTON_TODAY).setLabel('Today').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(PANEL_BUTTON_MY_LOOP).setLabel('My Loop').setStyle(ButtonStyle.Secondary),
   );
   if (overflowCount > 0) {
     row.addComponents(
@@ -826,6 +828,7 @@ export function isExecutionPanelButtonCustomId(customId: string): boolean {
   return (
     customId === PANEL_BUTTON_OPEN ||
     customId === PANEL_BUTTON_TODAY ||
+    customId === PANEL_BUTTON_MY_LOOP ||
     customId === PANEL_BUTTON_ACTIVE_MORE ||
     customId.startsWith(LOOP_PANEL_BUTTON_CLOSE_PREFIX)
   );
@@ -999,7 +1002,10 @@ export async function handleExecutionPanelButton(interaction: ButtonInteraction)
   }
 
   const isMainPanelButton =
-    customId === PANEL_BUTTON_OPEN || customId === PANEL_BUTTON_TODAY || customId === PANEL_BUTTON_ACTIVE_MORE;
+    customId === PANEL_BUTTON_OPEN ||
+    customId === PANEL_BUTTON_TODAY ||
+    customId === PANEL_BUTTON_MY_LOOP ||
+    customId === PANEL_BUTTON_ACTIVE_MORE;
   if (isMainPanelButton && !isConfiguredPanelChannel(loc.guildId, loc.channelId)) {
     await interaction.reply({ content: 'Use the panel channel.', ephemeral: true }).catch(() => {});
     return true;
@@ -1039,6 +1045,10 @@ export async function handleExecutionPanelButton(interaction: ButtonInteraction)
     await handleTodayButton(interaction);
     return true;
   }
+  if (customId === PANEL_BUTTON_MY_LOOP) {
+    await handleMyLoopButton(interaction);
+    return true;
+  }
 
   return false;
 }
@@ -1068,6 +1078,46 @@ async function handleOpenButton(interaction: ButtonInteraction): Promise<void> {
   }
 
   await interaction.showModal(buildStartModal());
+}
+
+async function handleMyLoopButton(interaction: ButtonInteraction): Promise<void> {
+  const userId = interaction.user.id;
+  const open = await loopService.getOpenLoopForUser(userId);
+
+  if (!open) {
+    await interaction.reply({
+      content: `You don’t have an active loop.`,
+      ephemeral: true,
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(PANEL_BUTTON_OPEN).setLabel('Open Loop').setStyle(ButtonStyle.Success),
+        ),
+      ],
+    });
+    return;
+  }
+
+  const channelId = open.loopPanelChannelId ?? getActiveLoopsChannelId();
+  const messageId = open.loopPanelMessageId;
+  const url =
+    messageId && messageId.length > 0 ? `https://discord.com/channels/${open.guildId}/${channelId}/${messageId}` : null;
+
+  const executed = sanitizeCommitmentDisplay(open.commitmentText, 500) || '—';
+  const elapsed = formatElapsedCompact(open.openedAt);
+
+  await interaction.reply({
+    content: url
+      ? [`Your active loop:`, `${executed}`, `(${elapsed})`].join('\n')
+      : [`Your active loop:`, `${executed}`, `(${elapsed})`, '', 'Unable to link to the loop message.'].join('\n'),
+    ephemeral: true,
+    components: url
+      ? [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('View Loop').setURL(url),
+          ),
+        ]
+      : [],
+  });
 }
 
 async function handleOwnedLoopCloseButton(interaction: ButtonInteraction, customId: string): Promise<void> {

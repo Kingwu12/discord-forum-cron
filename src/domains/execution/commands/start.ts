@@ -1,11 +1,19 @@
 import { type ChatInputCommandInteraction, MessageFlags, SlashCommandBuilder } from 'discord.js';
 
-import { createActiveLoopPanelMessage, ensureActiveLoopPanelForOpenLoop, ensureExecutionPanel } from '../../../bot/execution-panel';
+import {
+  createActiveLoopPanelMessage,
+  ensureActiveLoopPanelForOpenLoop,
+  ensureExecutionPanel,
+  purgeExpiredLoopBeforeOpen,
+  runExpiredLoopCleanupForUser,
+} from '../../../bot/execution-panel';
+import { isLoopExpired } from '../constants/loop-expiration';
 import { buildAlreadyOpenLoopReply } from '../formatters/open-loop-link';
 import { executionLog } from '../../../shared/logging';
 import { executionAccessService, toExecutionAccessContext } from '../services/execution-access-service';
 import { requireLoopAccess } from '../services/loop-access-guard';
 import { LoopService } from '../services/loop-service';
+import { logEvent } from '../../../shared/analytics/loop-behavior-analytics';
 
 /** User-facing copy (ephemeral — blocks only). */
 export const START_REPLY_DENIED = 'Execution commands are not available here.';
@@ -79,12 +87,24 @@ export async function handleStartCommand(interaction: ChatInputCommandInteractio
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
-    const result = await loopService.openLoop({
+    await purgeExpiredLoopBeforeOpen(interaction.client, interaction.user.id);
+
+    let result = await loopService.openLoop({
       discordUserId: interaction.user.id,
       guildId: interaction.guildId,
       channelId: interaction.channelId,
       commitmentText: commitmentRaw,
     });
+
+    if (!result.ok && isLoopExpired(result.openLoop)) {
+      await runExpiredLoopCleanupForUser(interaction.client, interaction.user.id);
+      result = await loopService.openLoop({
+        discordUserId: interaction.user.id,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        commitmentText: commitmentRaw,
+      });
+    }
 
     if (!result.ok) {
       const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, result.openLoop);
@@ -108,6 +128,17 @@ export async function handleStartCommand(interaction: ChatInputCommandInteractio
     await createActiveLoopPanelMessage(interaction.client, result.openLoop);
     await ensureExecutionPanel(interaction.client, { source: 'slash_open', userId: interaction.user.id });
     await interaction.editReply({ content: 'Loop started.' });
+    const slashUsername =
+      interaction.member &&
+      typeof interaction.member === 'object' &&
+      'displayName' in interaction.member &&
+      typeof (interaction.member as { displayName: string }).displayName === 'string'
+        ? (interaction.member as { displayName: string }).displayName
+        : interaction.user.globalName ?? interaction.user.username;
+    void logEvent(interaction.client, 'START', {
+      userId: interaction.user.id,
+      username: slashUsername,
+    });
   } catch (err) {
     executionLog.error(
       'loop_open_error',

@@ -12,6 +12,7 @@ import {
 } from 'discord.js';
 
 import { getLoopAccessRoleId } from '../../../config/execution-panel-env';
+import { logEvent } from '../../../shared/analytics/loop-behavior-analytics';
 
 /** Same copy for interaction ephemerals and DM when proof-close is blocked. */
 export const LOOP_ACCESS_GATE_MESSAGE = [
@@ -85,5 +86,11 @@ export async function requireLoopAccess(interaction: GateableInteraction): Promi
   const member = await resolveMemberForGate(interaction);
   if (hasLoopAccessMember(member)) return true;
   await replyLoopAccessDenied(interaction);
+  const username = interaction.user.globalName ?? interaction.user.username;
+  void logEvent(interaction.client, 'BLOCKED', {
+    userId: interaction.user.id,
+    username,
+    detail: 'loop_access',
+  });
   return false;
 }

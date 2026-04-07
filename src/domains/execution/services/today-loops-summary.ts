@@ -1,4 +1,5 @@
 import { getTodayDateKey } from '../../../shared/calendar-day';
+import { isLoopExpired } from '../constants/loop-expiration';
 import { formatExecutionDurationShort } from '../formatters/execution-feed-formatter';
 import { sanitizeCommitmentDisplay } from '../formatters/loop-formatters';
 import { formatTodayLoopsSummary } from '../formatters/loop-formatters';
@@ -21,7 +22,8 @@ export async function buildTodayLoopsSummaryForUser(discordUserId: string): Prom
       discordUserId,
       range,
     );
-    const open = await loopService.getOpenLoopForUser(discordUserId);
+    const openRaw = await loopService.getOpenLoopForUser(discordUserId);
+    const open = openRaw && !isLoopExpired(openRaw) ? openRaw : null;
 
     const openCountsTowardOpenedToday =
       open !== null && open.openedAt >= range.startMs && open.openedAt < range.endMsExclusive;

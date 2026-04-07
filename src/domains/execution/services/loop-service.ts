@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
+import { isLoopExpired } from '../constants/loop-expiration';
+
+/** Re-export: max open-loop window is defined alongside {@link isLoopExpired}. */
+export { MAX_LOOP_DURATION_MS, isLoopExpired } from '../constants/loop-expiration';
 import { ClosedLoopRepo } from '../repositories/closed-loop-repo';
 import { OpenLoopRepo } from '../repositories/open-loop-repo';
 import type {
@@ -46,7 +50,14 @@ export type CloseLoopOk = {
 
 export type CloseLoopNoOpen = { ok: false; reason: 'no_open_loop' };
 
-export type CloseLoopResult = CloseLoopOk | CloseLoopNoOpen;
+export type CloseLoopExpired = {
+  ok: false;
+  reason: 'expired';
+  /** Snapshot for Discord cleanup (panel message delete) after Firestore doc is removed. */
+  openLoop: OpenLoop;
+};
+
+export type CloseLoopResult = CloseLoopOk | CloseLoopNoOpen | CloseLoopExpired;
 
 function isAlreadyExistsError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
@@ -119,6 +130,11 @@ export class LoopService {
     }
 
     const now = this.clock();
+    if (isLoopExpired(open, now)) {
+      const openLoop = open;
+      await this.openRepo.deleteOpenLoop(input.discordUserId);
+      return { ok: false, reason: 'expired', openLoop };
+    }
     const proofTextRaw = input.proofText?.trim() ?? '';
     const urls = input.proofAttachmentUrls?.filter(Boolean) ?? [];
     const hasFile = urls.length > 0;

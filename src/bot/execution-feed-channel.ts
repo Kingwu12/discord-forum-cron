@@ -1,6 +1,11 @@
 import type { Client, Message, MessageCreateOptions, TextBasedChannel, Webhook } from 'discord.js';
-import { getExecutionFeedChannelId } from '../config/execution-panel-env';
+import {
+  getExecutionFeedChannelId,
+  getExecutionPanelChannelId,
+  getExecutionPanelGuildId,
+} from '../config/execution-panel-env';
 import { buildExecutionFeedEmbed } from '../domains/execution/formatters/execution-feed-formatter';
+import { ClosedLoopRepo } from '../domains/execution/repositories/closed-loop-repo';
 import type { ReflectionStatus } from '../domains/execution/types/execution.types';
 import { executionLog } from '../shared/logging';
 
@@ -14,6 +19,51 @@ export type ExecutionFeedPostParams = {
 };
 
 const EXECUTION_FEED_WEBHOOK_NAME = 'Execution Feed Relay';
+
+/** After this many successful completion posts (since process start), inject a one-line activity signal. */
+const FEED_TODAY_COUNT_INJECT_INTERVAL = 5;
+
+let successfulFeedCompletionPosts = 0;
+
+const closedLoopRepo = new ClosedLoopRepo();
+
+/**
+ * Subtle feed rhythm: after every N successful completion posts, sends a neutral one-liner
+ * with today’s closed count (same calendar day + execution context as `/today` panel logic).
+ * Plain `channel.send` — not user-styled webhook — so it reads as ambient feed copy.
+ */
+export async function maybeInjectTodayCountMessage(client: Client): Promise<void> {
+  successfulFeedCompletionPosts += 1;
+  if (successfulFeedCompletionPosts % FEED_TODAY_COUNT_INJECT_INTERVAL !== 0) return;
+
+  const channelId = getExecutionFeedChannelId();
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel || !channel.isTextBased() || !channel.isSendable()) {
+    executionLog.warn('execution_feed_today_count_skipped_channel', { channelId });
+    return;
+  }
+
+  try {
+    const range = closedLoopRepo.todayRange();
+    const count = await closedLoopRepo.countClosedInContextByClosedAtRange(
+      getExecutionPanelGuildId(),
+      getExecutionPanelChannelId(),
+      range,
+    );
+    const content = `— ${count} loops closed today —`;
+    await channel.send({ content });
+    executionLog.info('execution_feed_today_count_injected', {
+      channelId,
+      count: String(count),
+      interval: String(FEED_TODAY_COUNT_INJECT_INTERVAL),
+    });
+  } catch (err) {
+    executionLog.warn('execution_feed_today_count_failed', {
+      channelId,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 function inferProofFilenameFromUrl(url: string): string {
   const clean = url.split('?')[0] ?? url;
@@ -64,22 +114,30 @@ export async function sendExecutionCompleteToFeed(
   const proofImageUrl = params.proofAttachmentUrls?.[0];
   const proofFilename = proofImageUrl ? inferProofFilenameFromUrl(proofImageUrl) : undefined;
   const proofImageRef = proofFilename ? `attachment://${proofFilename}` : undefined;
-  const executedText = params.taskText?.trim() || undefined;
-  const reflectionText = params.proofText?.trim() || undefined;
+
+  const guild = 'guild' in channel && channel.guild ? channel.guild : null;
+  const member = guild ? await guild.members.fetch(params.userId).catch(() => null) : null;
+  const user = member?.user ?? (await client.users.fetch(params.userId).catch(() => null));
+  const feedUsername =
+    member?.displayName ?? user?.globalName ?? user?.username ?? params.userId;
+
   const embed = buildExecutionFeedEmbed({
+    username: feedUsername,
     durationMs: params.durationMs,
-    executedText,
-    reflectionText,
+    taskText: params.taskText?.trim() ?? '',
     proofImageRef,
-    proofFallbackText: proofImageUrl,
   });
-  await sendUserStyledChannelMessage(client, {
+  const posted = await sendUserStyledChannelMessage(client, {
     channel,
     userId: params.userId,
     embeds: [embed],
     files: proofImageUrl && proofFilename ? [{ attachment: proofImageUrl, name: proofFilename }] : undefined,
     logPrefix: 'execution_feed',
   });
+
+  if (posted) {
+    await maybeInjectTodayCountMessage(client);
+  }
 }
 
 export async function sendUserStyledChannelMessage(

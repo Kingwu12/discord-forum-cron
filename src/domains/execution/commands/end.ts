@@ -1,12 +1,20 @@
 import { type ChatInputCommandInteraction, MessageFlags, SlashCommandBuilder } from 'discord.js';
 
-import { deleteActiveLoopPanelMessage, ensureExecutionPanel } from '../../../bot/execution-panel';
+import {
+  cancelLoopExpirationTimer,
+  deleteActiveLoopPanelMessage,
+  ensureExecutionPanel,
+  expireLoop,
+  LOOP_EXPIRED_USER_MESSAGE,
+} from '../../../bot/execution-panel';
+import { isLoopExpired } from '../constants/loop-expiration';
 import { sendExecutionCompleteToFeed } from '../../../bot/execution-feed-channel';
 import { executionLog } from '../../../shared/logging';
 import { executionAccessService, toExecutionAccessContext } from '../services/execution-access-service';
 import { requireLoopAccess } from '../services/loop-access-guard';
 import type { ReflectionStatus } from '../types/execution.types';
 import { LoopService } from '../services/loop-service';
+import { logEvent } from '../../../shared/analytics/loop-behavior-analytics';
 import { START_REPLY_DENIED, START_REPLY_ERROR } from './start';
 
 export const END_REPLY_NO_OPEN_LOOP = 'No open loop found.';
@@ -91,6 +99,15 @@ export async function handleEndCommand(interaction: ChatInputCommandInteraction)
     return;
   }
 
+  if (isLoopExpired(open)) {
+    await expireLoop(interaction.client, open);
+    await interaction.reply({
+      content: LOOP_EXPIRED_USER_MESSAGE,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   const proofFile = interaction.options.getAttachment('proof_file');
   const proofText = interaction.options.getString('proof_text')?.trim() ?? '';
   const hasProof = Boolean(proofFile) || proofText.length > 0;
@@ -139,6 +156,11 @@ export async function handleEndCommand(interaction: ChatInputCommandInteraction)
     });
 
     if (!result.ok) {
+      if (result.reason === 'expired') {
+        await expireLoop(interaction.client, result.openLoop);
+        await interaction.editReply({ content: LOOP_EXPIRED_USER_MESSAGE });
+        return;
+      }
       executionLog.info('loop_close_blocked_no_open', {
         userId: interaction.user.id,
         guildId: interaction.guildId,
@@ -157,6 +179,7 @@ export async function handleEndCommand(interaction: ChatInputCommandInteraction)
       closedLoopFirestoreId: result.closedLoopFirestoreId,
     });
 
+    cancelLoopExpirationTimer(interaction.user.id);
     await deleteActiveLoopPanelMessage(interaction.client, open);
     await ensureExecutionPanel(interaction.client, { source: 'slash_close', userId: interaction.user.id });
     await sendExecutionCompleteToFeed(interaction.client, {
@@ -166,6 +189,18 @@ export async function handleEndCommand(interaction: ChatInputCommandInteraction)
       proofText: result.closedLoop.proofText,
       reflectionStatus: result.closedLoop.reflectionStatus,
       proofAttachmentUrls: result.closedLoop.proofAttachmentUrls,
+    });
+    const endUsername =
+      interaction.member &&
+      typeof interaction.member === 'object' &&
+      'displayName' in interaction.member &&
+      typeof (interaction.member as { displayName: string }).displayName === 'string'
+        ? (interaction.member as { displayName: string }).displayName
+        : interaction.user.globalName ?? interaction.user.username;
+    void logEvent(interaction.client, 'CLOSE', {
+      userId: interaction.user.id,
+      username: endUsername,
+      durationMs: result.closedLoop.openDurationMs,
     });
     await interaction.deleteReply().catch(() => {});
   } catch (err) {

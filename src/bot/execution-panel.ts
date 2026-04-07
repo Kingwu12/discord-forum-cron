@@ -20,6 +20,7 @@ import {
   getExecutionPanelGuildId,
   isExecutionPanelConfigured,
 } from '../config/execution-panel-env';
+import { isLoopExpired, loopExpiresAtMs } from '../domains/execution/constants/loop-expiration';
 import { sendExecutionCompleteToFeed, sendUserStyledChannelMessage } from './execution-feed-channel';
 import { ClosedLoopRepo } from '../domains/execution/repositories/closed-loop-repo';
 import { ExecutionPanelStateRepo } from '../domains/execution/repositories/execution-panel-state-repo';
@@ -39,12 +40,16 @@ import {
 import { LoopService } from '../domains/execution/services/loop-service';
 import { buildTodayClosedLoopsSummaryForContext } from '../domains/execution/services/today-loops-summary';
 import type { OpenLoop } from '../domains/execution/types/execution.types';
+import { logEvent } from '../shared/analytics/loop-behavior-analytics';
 import { executionLog } from '../shared/logging';
 
 const loopService = new LoopService();
 const panelStateRepo = new ExecutionPanelStateRepo();
 const openLoopRepo = new OpenLoopRepo();
 const closedLoopRepo = new ClosedLoopRepo();
+
+/** Ephemeral copy when a close is attempted on an expired loop (see `isLoopExpired`). */
+export const LOOP_EXPIRED_USER_MESSAGE = 'That loop expired.\nStart a new one.';
 
 export const PANEL_BUTTON_OPEN = 'citadel:exec:open';
 export const PANEL_BUTTON_TODAY = 'citadel:exec:today';
@@ -147,6 +152,10 @@ async function buildPanelEmbed(
   channelId: string,
   _focusUserId: string | null,
 ): Promise<EmbedBuilder> {
+  const stale = await openLoopRepo.listOpenLoopsInContext(guildId, channelId, ACTIVE_FETCH_LIMIT);
+  for (const loop of stale) {
+    if (isLoopExpired(loop)) await runExpiredLoopCleanupForUser(client, loop.discordUserId);
+  }
   const openLoops = await openLoopRepo.listOpenLoopsInContext(guildId, channelId, ACTIVE_FETCH_LIMIT);
   const sortedOpenLoops = [...openLoops].sort((a, b) => a.openedAt - b.openedAt);
   const activeCount = sortedOpenLoops.length;
@@ -325,6 +334,7 @@ export async function createActiveLoopPanelMessage(
   });
   if (!msg) return;
   await openLoopRepo.setLoopPanelRef(openLoop.discordUserId, msg.id, channel.id);
+  scheduleLoopExpiration(client, openLoop);
 }
 
 async function fetchActiveLoopPanelMessage(
@@ -355,6 +365,10 @@ export async function ensureActiveLoopPanelForOpenLoop(client: Client, openLoop:
 export async function restoreOrphanedActiveLoopPanels(client: Client): Promise<void> {
   const openLoops = await openLoopRepo.listAllOpenLoops(500);
   for (const openLoop of openLoops) {
+    if (isLoopExpired(openLoop)) {
+      await runExpiredLoopCleanupForUser(client, openLoop.discordUserId);
+      continue;
+    }
     const beforeMessageId = openLoop.loopPanelMessageId;
     const healed = await ensureActiveLoopPanelForOpenLoop(client, openLoop);
     if (healed.loopPanelMessageId && healed.loopPanelMessageId !== beforeMessageId) {
@@ -386,6 +400,101 @@ export async function deleteActiveLoopPanelMessage(
     .then((m) => m.delete())
     .catch(() => {});
 }
+
+const loopExpirationTimers = new Map<string, NodeJS.Timeout>();
+
+export function cancelLoopExpirationTimer(discordUserId: string): void {
+  const t = loopExpirationTimers.get(discordUserId);
+  if (t) {
+    clearTimeout(t);
+    loopExpirationTimers.delete(discordUserId);
+  }
+}
+
+/**
+ * Idempotent expiry: best-effort delete panel message, remove open-loop doc, refresh panel.
+ * Safe if the message or doc is already gone (no throw to callers).
+ */
+export async function expireLoop(client: Client, loop: OpenLoop): Promise<void> {
+  cancelLoopExpirationTimer(loop.discordUserId);
+  try {
+    await deleteActiveLoopPanelMessage(client, loop);
+  } catch {
+    /* ignore */
+  }
+  try {
+    await openLoopRepo.deleteOpenLoop(loop.discordUserId);
+  } catch {
+    /* ignore */
+  }
+  try {
+    await ensureExecutionPanel(client, { source: 'loop_expired', userId: loop.discordUserId });
+  } catch {
+    /* ignore */
+  }
+
+  let username = loop.discordUserId;
+  try {
+    const guild = await client.guilds.fetch(loop.guildId).catch(() => null);
+    const member = guild ? await guild.members.fetch(loop.discordUserId).catch(() => null) : null;
+    const user = member?.user ?? (await client.users.fetch(loop.discordUserId).catch(() => null));
+    username = member?.displayName ?? user?.globalName ?? user?.username ?? loop.discordUserId;
+  } catch {
+    /* keep id */
+  }
+  void logEvent(client, 'EXPIRE', { userId: loop.discordUserId, username });
+}
+
+/** Lazy cleanup: if this user’s open loop is past max duration, run {@link expireLoop}. */
+export async function runExpiredLoopCleanupForUser(client: Client, discordUserId: string): Promise<void> {
+  const open = await openLoopRepo.getOpenLoop(discordUserId);
+  if (!open || !isLoopExpired(open)) return;
+  await expireLoop(client, open);
+}
+
+/** Alias: run expired cleanup for one user (open/close interaction hygiene). */
+export const cleanupExpiredLoopsForUser = runExpiredLoopCleanupForUser;
+
+/** Call before opening a new loop so an expired row + panel message do not block `/start` or the modal. */
+export async function purgeExpiredLoopBeforeOpen(client: Client, discordUserId: string): Promise<void> {
+  await cleanupExpiredLoopsForUser(client, discordUserId);
+}
+
+/**
+ * One-shot timer for this user’s loop; fires {@link runExpiredLoopCleanupForUser} when the window elapses.
+ * Does not edit messages on an interval — only this single timeout per open.
+ */
+export function scheduleLoopExpiration(
+  client: Client,
+  loop: Pick<OpenLoop, 'discordUserId' | 'openedAt'>,
+): void {
+  cancelLoopExpirationTimer(loop.discordUserId);
+  const timeLeft = loopExpiresAtMs(loop) - Date.now();
+  const id = loop.discordUserId;
+  if (timeLeft <= 0) {
+    void runExpiredLoopCleanupForUser(client, id);
+    return;
+  }
+  const handle = setTimeout(() => {
+    loopExpirationTimers.delete(id);
+    void runExpiredLoopCleanupForUser(client, id);
+  }, timeLeft);
+  loopExpirationTimers.set(id, handle);
+}
+
+/**
+ * Startup: load all open loops from storage and expire any past max duration (restart + pre-deploy safety).
+ */
+export async function cleanupExpiredLoopsOnStartup(client: Client): Promise<void> {
+  const loops = await openLoopRepo.listAllOpenLoops(5000);
+  for (const loop of loops) {
+    if (!isLoopExpired(loop)) continue;
+    await runExpiredLoopCleanupForUser(client, loop.discordUserId);
+  }
+}
+
+/** @deprecated Use {@link cleanupExpiredLoopsOnStartup}. */
+export const expireAllStaleOpenLoops = cleanupExpiredLoopsOnStartup;
 
 export async function markActiveLoopAwaitingSnap(
   client: Client,
@@ -446,6 +555,11 @@ export async function handleActiveLoopsProofMessage(message: Message): Promise<b
   });
   if (!open || open.status !== 'awaiting_snap') return false;
 
+  if (isLoopExpired(open)) {
+    await expireLoop(message.client, open);
+    return false;
+  }
+
   if (message.attachments.size < 1) return false;
   const firstAttachment = message.attachments.first();
   if (!firstAttachment) return false;
@@ -466,7 +580,12 @@ export async function handleActiveLoopsProofMessage(message: Message): Promise<b
     proofAttachmentUrls: [firstAttachment.url],
     proofMessageId: message.id,
   });
-  if (!result.ok) return false;
+  if (!result.ok) {
+    if (result.reason === 'expired') {
+      await expireLoop(message.client, result.openLoop);
+    }
+    return false;
+  }
 
   await sendExecutionCompleteToFeed(message.client, {
     userId: message.author.id,
@@ -476,6 +595,13 @@ export async function handleActiveLoopsProofMessage(message: Message): Promise<b
     reflectionStatus: result.closedLoop.reflectionStatus,
     proofAttachmentUrls: result.closedLoop.proofAttachmentUrls,
   });
+  const closeUsername = proofMember?.displayName ?? message.author.username;
+  void logEvent(message.client, 'CLOSE', {
+    userId: message.author.id,
+    username: closeUsername,
+    durationMs: result.closedLoop.openDurationMs,
+  });
+  cancelLoopExpirationTimer(message.author.id);
   await deleteActiveLoopPanelMessage(message.client, open);
   await ensureExecutionPanel(message.client, { source: 'proof_close', userId: message.author.id });
   await message.delete().catch((err) => {
@@ -639,7 +765,11 @@ export async function refreshExecutionPanelIfActive(client: Client): Promise<voi
   const contextKey = panelContextKey(guildId, channelId);
 
   try {
-    const openLoops = await openLoopRepo.listOpenLoopsInContext(guildId, channelId, ACTIVE_FETCH_LIMIT);
+    let openLoops = await openLoopRepo.listOpenLoopsInContext(guildId, channelId, ACTIVE_FETCH_LIMIT);
+    for (const loop of openLoops) {
+      if (isLoopExpired(loop)) await runExpiredLoopCleanupForUser(client, loop.discordUserId);
+    }
+    openLoops = await openLoopRepo.listOpenLoopsInContext(guildId, channelId, ACTIVE_FETCH_LIMIT);
     if (openLoops.length < 1) {
       lastIntervalRenderByContext.delete(contextKey);
       return;
@@ -751,6 +881,8 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
       source: 'panel_modal',
     });
 
+    await purgeExpiredLoopBeforeOpen(interaction.client, userId);
+
     try {
       await interaction.deferReply({ ephemeral: true });
     } catch (deferErr) {
@@ -761,7 +893,11 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
     }
 
     try {
-      const existingOpen = await loopService.getOpenLoopForUser(userId);
+      let existingOpen = await loopService.getOpenLoopForUser(userId);
+      if (existingOpen && isLoopExpired(existingOpen)) {
+        await runExpiredLoopCleanupForUser(interaction.client, userId);
+        existingOpen = await loopService.getOpenLoopForUser(userId);
+      }
       if (existingOpen) {
         const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, existingOpen);
         executionLog.info('loop_open_blocked_existing_open', {
@@ -777,12 +913,22 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
         return true;
       }
 
-      const result = await loopService.openLoop({
+      let result = await loopService.openLoop({
         discordUserId: userId,
         guildId,
         channelId,
         commitmentText: commitment.slice(0, 400),
       });
+
+      if (!result.ok && isLoopExpired(result.openLoop)) {
+        await runExpiredLoopCleanupForUser(interaction.client, userId);
+        result = await loopService.openLoop({
+          discordUserId: userId,
+          guildId,
+          channelId,
+          commitmentText: commitment.slice(0, 400),
+        });
+      }
 
       if (!result.ok) {
         const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, result.openLoop);
@@ -810,6 +956,8 @@ export async function handleExecutionModalSubmit(interaction: ModalSubmitInterac
       await createActiveLoopPanelMessage(interaction.client, result.openLoop);
       await ensureExecutionPanel(interaction.client, { source: 'panel_open', userId });
       await interaction.editReply({ content: 'Loop started.' });
+      const modalUsername = interaction.user.globalName ?? interaction.user.username;
+      void logEvent(interaction.client, 'START', { userId, username: modalUsername });
     } catch (err) {
       console.error('[citadel] MODAL_START error', err);
       executionLog.error('loop_open_error', { userId, guildId, channelId, source: 'panel_modal' }, err);
@@ -900,6 +1048,8 @@ async function handleOpenButton(interaction: ButtonInteraction): Promise<void> {
   const guildId = interaction.guildId!;
   const channelId = interaction.channelId!;
 
+  await purgeExpiredLoopBeforeOpen(interaction.client, userId);
+
   const open = await loopService.getOpenLoopForUser(userId);
   if (open) {
     const healedOpenLoop = await ensureActiveLoopPanelForOpenLoop(interaction.client, open);
@@ -929,6 +1079,11 @@ async function handleOwnedLoopCloseButton(interaction: ButtonInteraction, custom
   const open = await loopService.getOpenLoopForUser(ownerUserId);
   if (!open) {
     await interaction.reply({ content: 'No open loop found.', ephemeral: true });
+    return;
+  }
+  if (isLoopExpired(open)) {
+    await expireLoop(interaction.client, open);
+    await interaction.reply({ content: LOOP_EXPIRED_USER_MESSAGE, ephemeral: true });
     return;
   }
   if (open.status === 'awaiting_snap') {

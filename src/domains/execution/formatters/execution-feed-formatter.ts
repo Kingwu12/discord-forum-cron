@@ -13,6 +13,28 @@ export function formatExecutionDurationShort(ms: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
+export type ExecutionFeedMessageParams = {
+  /** Plain-text display or global name — no @ mention. */
+  username: string;
+  durationMs: number;
+  /** Commitment / task copy (no prefix; normalized to a single line for the feed layout). */
+  task: string;
+};
+
+/**
+ * Social-proof style feed copy: exactly two lines (leading ▸ only).
+ * Line 1: ▸ {username} completed a {duration} loop
+ * Line 2: {task}
+ */
+export function formatExecutionFeedMessage(p: ExecutionFeedMessageParams): string {
+  const duration = formatExecutionDurationShort(p.durationMs);
+  const name = p.username.replace(/\r?\n/g, ' ').trim() || '—';
+  const task = p.task.replace(/\r?\n/g, ' ').trim().slice(0, 3500);
+  const line1 = `▸ ${name} completed a ${duration} loop`;
+  const line2 = task.length > 0 ? task : '—';
+  return `${line1}\n${line2}`;
+}
+
 export type SuggestedClosePostParams = {
   durationMs: number;
   executedText: string;
@@ -38,37 +60,21 @@ export function buildSuggestedClosePost(p: SuggestedClosePostParams): string {
 }
 
 export function buildExecutionFeedEmbed(p: {
+  username: string;
   durationMs: number;
-  executedText?: string;
-  reflectionText?: string;
+  taskText: string;
   proofImageRef?: string;
-  proofFallbackText?: string;
 }): EmbedBuilder {
-  const duration = formatExecutionDurationShort(p.durationMs);
-  const executed = p.executedText ? sanitizeCommitmentDisplay(p.executedText, 500) : '';
-  const reflection = p.reflectionText ? sanitizeCommitmentDisplay(p.reflectionText, 700) : '';
-  const proofFallbackText = p.proofFallbackText
-    ? sanitizeCommitmentDisplay(p.proofFallbackText, 700)
-    : undefined;
+  const description = formatExecutionFeedMessage({
+    username: p.username,
+    durationMs: p.durationMs,
+    task: p.taskText,
+  });
 
-  const lines: string[] = [];
-  if (executed.length > 0) {
-    lines.push(`EXECUTED: ${executed}`);
-  }
-  lines.push(`DURATION: ${duration}`);
-
-  const embed = new EmbedBuilder().setTitle('Loop closed');
-  if (lines.length > 0) {
-    embed.setDescription(lines.join('\n'));
-  }
+  const embed = new EmbedBuilder().setDescription(description);
 
   if (p.proofImageRef) {
     embed.setImage(p.proofImageRef);
-  } else if (proofFallbackText) {
-    embed.setDescription([...(lines.length > 0 ? lines : []), `PROOF: ${proofFallbackText}`].join('\n'));
-  }
-  if (reflection.length > 0) {
-    embed.setFooter({ text: `"${reflection}"` });
   }
 
   return embed;
